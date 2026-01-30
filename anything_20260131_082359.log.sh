@@ -47,7 +47,6 @@ _ask() {
 You are a bash code generator in an iterative execution loop.
 
 SYSTEM: $(uname -sm) $(. /etc/os-release 2>/dev/null && echo "$PRETTY_NAME" || sw_vers -productName 2>/dev/null) | $SHELL | $PWD
-DISPLAY: $([[ -n "$WAYLAND_DISPLAY" ]] && echo "wayland:$WAYLAND_DISPLAY" || [[ -n "$DISPLAY" ]] && echo "x11:$DISPLAY" || echo "none") $([[ -n "$SSH_TTY" ]] && echo "[ssh]")
 
 TASK: $intent
 $feedback
@@ -189,8 +188,6 @@ Please diagnose the issue and fix it. You may need to install additional depende
     # Append _prompt for next user input
     cat >> "$SELF" <<'PROMPT_MARKER'
 
-_prompt
-#
 PROMPT_MARKER
 }
 
@@ -229,3 +226,57 @@ echo ""
 [[ -n "${1:-}" ]] && _evolve "$1" || _prompt
 #
 
+
+# ═══════════════════════════════════════════════════════════════
+# STEP 1: Check if chocolate-doom or similar is installed
+# Generated: 2026-01-31 08:22:04
+# ═══════════════════════════════════════════════════════════════
+step1() { command -v chocolate-doom &>/dev/null && echo "chocolate-doom INSTALLED" || command -v crispy-doom &>/dev/null && echo "crispy-doom INSTALLED" || command -v prboom-plus &>/dev/null && echo "prboom-plus INSTALLED" || command -v gzdoom &>/dev/null && echo "gzdoom INSTALLED" || echo "NO_DOOM_PORT_INSTALLED"; }
+step1
+
+# ═══════════════════════════════════════════════════════════════
+# STEP 2: Install a Doom source port (Chocolate Doom) and check for WAD files
+# Generated: 2026-01-31 08:22:11
+# ═══════════════════════════════════════════════════════════════
+step2() {
+    # Install chocolate-doom (classic Doom port)
+    sudo pacman -S --noconfirm chocolate-doom 2>/dev/null || yay -S --noconfirm chocolate-doom 2>/dev/null
+    
+    # Check for existing WAD files
+    echo "=== Checking for WAD files ==="
+    find /usr -name "*.wad" -o -name "*.WAD" 2>/dev/null | head -5
+    find ~/.local -name "*.wad" -o -name "*.WAD" 2>/dev/null | head -5
+    
+    # Check if freedoom is available (free Doom WAD)
+    pacman -Ss freedoom 2>/dev/null | head -3
+}
+step2
+
+# ═══════════════════════════════════════════════════════════════
+# STEP 3: Launch chocolate-doom with freedoom WAD
+# Generated: 2026-01-31 08:22:49
+# ═══════════════════════════════════════════════════════════════
+step3() {
+    # Check if freedoom is installed, if not install it
+    if ! pacman -Q freedoom2 &>/dev/null; then
+        echo "Installing freedoom2..."
+        yay -S --noconfirm freedoom2
+    fi
+    
+    # Find the freedoom WAD file
+    WAD=$(find /usr/share -name "freedoom2.wad" 2>/dev/null | head -1)
+    if [ -z "$WAD" ]; then
+        WAD=$(find /usr/share -name "*.wad" 2>/dev/null | grep -i freedoom | head -1)
+    fi
+    
+    if [ -n "$WAD" ]; then
+        echo "Found WAD: $WAD"
+        echo "Launching chocolate-doom..."
+        chocolate-doom -iwad "$WAD" &
+        echo "Doom launched in background!"
+    else
+        echo "No freedoom WAD found. Available WADs:"
+        find /usr/share -name "*.wad" 2>/dev/null
+    fi
+}
+step3

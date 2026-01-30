@@ -6,6 +6,7 @@ import { getRandomExitMessage } from './exitMessages';
 const LLM_PROMPT = `You are a bash code generator in an iterative execution loop.
 
 SYSTEM: \$(uname -sm) \$(. /etc/os-release 2>/dev/null && echo "\$PRETTY_NAME" || sw_vers -productName 2>/dev/null) | \$SHELL | \$PWD
+DISPLAY: \$([[ -n "\$WAYLAND_DISPLAY" ]] && echo "wayland:\$WAYLAND_DISPLAY" || [[ -n "\$DISPLAY" ]] && echo "x11:\$DISPLAY" || echo "none") \$([[ -n "\$SSH_TTY" ]] && echo "[ssh]")
 
 TASK: \$intent
 \$feedback
@@ -219,18 +220,29 @@ _evolve() {
 $code
 EVOLUTION
 
+        # Execute and capture output
+        echo -e "\\033[36m[running...]\\033[0m"
+        local output exit_code
+        output=$( { eval "$code"; } 2>&1 )
+        exit_code=$?
+        echo "$output"
+        [[ $exit_code -ne 0 ]] && echo -e "\\033[31m[exit $exit_code]\\033[0m"
+
         if [[ "$is_final" != "true" ]]; then
-            # Execute and capture output for feedback
-            echo -e "\\033[36m[running...]\\033[0m"
-            local output exit_code
-            output=$( { eval "$code"; } 2>&1 )
-            exit_code=$?
-            echo "$output"
             feedback="
 PREVIOUS STEP OUTPUT (exit code $exit_code):
 $output
 "
-            [[ $exit_code -ne 0 ]] && echo -e "\\033[31m[exit $exit_code]\\033[0m"
+        elif [[ $exit_code -ne 0 && $iteration -lt $max_iterations ]]; then
+            # Final step failed - give LLM a chance to recover
+            echo -e "\\033[33m[final step failed, attempting recovery...]\\033[0m"
+            is_final="false"
+            feedback="
+FINAL STEP FAILED (exit code $exit_code):
+$output
+
+Please diagnose the issue and fix it. You may need to install additional dependencies or use different parameters.
+"
         fi
     done
 
@@ -310,11 +322,14 @@ _evolve() {
         echo "$code" | grep -q '^\`\`\`' && code=$(echo "$code" | sed -n '/^\`\`\`/,/^\`\`\`/p' | sed '/^\`\`\`/d')
         echo -e "\\033[32m[step $STEP]\\033[0m $desc"
         echo -e "\\n# STEP $STEP: $desc\\n$code" >> "$SELF"
+        echo -e "\\033[36m[running...]\\033[0m"
+        local out; out=$( { eval "$code"; } 2>&1 ); local rc=$?
+        echo "$out"; [[ $rc -ne 0 ]] && echo -e "\\033[31m[exit $rc]\\033[0m"
         if [[ "$is_final" != "true" ]]; then
-            echo -e "\\033[36m[running...]\\033[0m"
-            local out; out=$( { eval "$code"; } 2>&1 ); local rc=$?
-            echo "$out"; feedback="\\nPREVIOUS OUTPUT (exit $rc):\\n$out\\n"
-            [[ $rc -ne 0 ]] && echo -e "\\033[31m[exit $rc]\\033[0m"
+            feedback="\\nPREVIOUS OUTPUT (exit $rc):\\n$out\\n"
+        elif [[ $rc -ne 0 && $iter -lt 5 ]]; then
+            echo -e "\\033[33m[recovery...]\\033[0m"; is_final="false"
+            feedback="\\nFINAL FAILED (exit $rc):\\n$out\\nPlease fix.\\n"
         fi
     done
     echo -e "\\n_prompt\\n#" >> "$SELF"
