@@ -1,38 +1,50 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Terminal, Copy, ShieldAlert, FileCode, Skull, Zap, Eye, Command } from 'lucide-react';
+import { getRandomExitMessage } from './exitMessages';
 
 // Shared LLM prompt template (embedded in bash scripts)
-const LLM_PROMPT = `You are part of an AUTOPOIETIC, SELF-MODIFYING EXECUTION LOOP.
+const LLM_PROMPT = `You are a bash code generator in an iterative execution loop.
 
-This bash script appends your output to itself and executes it immediately.
+SYSTEM: \$(uname -sm) \$(. /etc/os-release 2>/dev/null && echo "\$PRETTY_NAME" || sw_vers -productName 2>/dev/null) | \$SHELL | \$PWD
 
 TASK: \$intent
+\$feedback
 
-OUTPUT FORMAT - You MUST output:
-1. Any helper functions needed (optional)
-2. A main function named step\${STEP} that implements the task
-3. A call to that function
-
-Example:
-deps_step\${STEP}() { echo "helper"; }
-step\${STEP}() { deps_step\${STEP}; echo "doing task"; }
-step\${STEP}
+OUTPUT FORMAT (exactly 3 lines, then code):
+FINAL: <true if task complete, false if you need to see output first>
+DESCRIPTION: <short description of this step>
+BASH_CODE:
+<your bash code here - no markdown, no fences>
 
 RULES:
-- Output ONLY valid bash code - NO markdown, NO explanation, NO \\\`\\\`\\\`
-- Your code is appended to this script and runs immediately
-- Available: _ask, _evolve, _prompt, _cleanup
-- Current STEP: \$STEP
-- Script has \$(wc -l < "\$SELF") lines`;
+- If you need to check something (installed packages, file contents, etc), set FINAL: false
+- When FINAL: false, your code runs and stdout/stderr is sent back to you
+- When FINAL: true, task is complete and user is prompted for next task
+- No markdown fences, no explanation outside the format above
+- Each code block should define and call step\${STEP}()
+
+EXAMPLE (checking before installing):
+FINAL: false
+DESCRIPTION: Check if package is installed
+BASH_CODE:
+step\${STEP}() { command -v figlet &>/dev/null && echo "INSTALLED" || echo "NOT_INSTALLED"; }
+step\${STEP}
+
+EXAMPLE (final step after seeing output):
+FINAL: true
+DESCRIPTION: Install figlet
+BASH_CODE:
+step\${STEP}() { sudo pacman -S --noconfirm figlet && figlet "Hello"; }
+step\${STEP}`;
 
 // LLM CLI Provider configurations
 const PROVIDERS = {
   claude: {
-    name: 'Claude Code',
+    name: 'Claude',
     cmd: 'claude -p "$full_prompt" --dangerously-skip-permissions 2>/dev/null',
   },
   codex: {
-    name: 'OpenAI Codex',
+    name: 'Codex',
     cmd: 'codex exec "$full_prompt" --full-auto 2>/dev/null',
   },
   aider: {
@@ -40,7 +52,7 @@ const PROVIDERS = {
     cmd: 'aider --message "$full_prompt" --yes --no-stream 2>/dev/null',
   },
   gemini: {
-    name: 'Gemini CLI',
+    name: 'Gemini',
     cmd: 'gemini -p "$full_prompt" 2>/dev/null',
   },
   goose: {
@@ -56,7 +68,7 @@ const PROVIDERS = {
     cmd: 'opencode run "$full_prompt" 2>/dev/null',
   },
   kimi: {
-    name: 'Kimi CLI',
+    name: 'Kimi',
     cmd: 'kimi --print --command "$full_prompt" 2>/dev/null',
   },
   groq: {
@@ -82,7 +94,7 @@ const getScriptFull = (provider: ProviderId) => `#!/bin/bash
 # ╔════════════════════════════════════════════════════════════════╗
 # ║  anything.sh - Autopoietic Self-Modifying Execution Loop       ║
 # ║  A script that evolves by appending LLM-generated code.        ║
-# ║  Provider: ${PROVIDERS[provider].name.padEnd(49)}║
+# ║  Provider: ${PROVIDERS[provider].name.padEnd(49)}   ║
 # ╚════════════════════════════════════════════════════════════════╝
 # USAGE: ./anything.sh ["initial prompt"]
 
@@ -98,7 +110,7 @@ STEP=0
 # ─────────────────────────────────────────────────────────────────
 # BACKUP: Save original on first run
 # ─────────────────────────────────────────────────────────────────
-[[ ! -f "$ORIG" ]] && cp "$SELF" "$ORIG" && echo -e "\\\\033[36m[backup]\\\\033[0m $ORIG"
+[[ ! -f "$ORIG" ]] && cp "$SELF" "$ORIG" && echo -e "\\033[36m[backup]\\033[0m $ORIG"
 
 # ─────────────────────────────────────────────────────────────────
 # CLEANUP: Runs on EXIT - archives session, restores original
@@ -110,8 +122,8 @@ _cleanup() {
     cp "$SELF" "$archive" 2>/dev/null || true
     cp "$ORIG" "$SELF" 2>/dev/null || true
     echo ""
-    echo -e "\\\\033[36m[archived]\\\\033[0m $archive"
-    echo -e "\\\\033[36m[restored]\\\\033[0m $SELF"
+    echo -e "\\033[36m[archived]\\033[0m $archive"
+    echo -e "\\033[36m[restored]\\033[0m $SELF"
     exit $rc
 }
 trap _cleanup EXIT
@@ -121,9 +133,25 @@ trap _cleanup EXIT
 # ─────────────────────────────────────────────────────────────────
 _ask() {
     local intent="$1"
-    local full_prompt="${LLM_PROMPT}"
+    local full_prompt
+    read -r -d '' full_prompt <<PROMPT
+${LLM_PROMPT}
+PROMPT
 
     ${PROVIDERS[provider].cmd}
+}
+
+# ─────────────────────────────────────────────────────────────────
+# SPINNER: Pulsing animation while waiting
+# ─────────────────────────────────────────────────────────────────
+_spinner() {
+    local frames=('·    ' '··   ' '···  ' '···· ' '·····' ' ····' '  ···' '   ··' '    ·' '     ')
+    local i=0
+    while true; do
+        printf "\\r\\033[36m%s\\033[0m pulsing..." "\${frames[i]}"
+        i=$(( (i + 1) % \${#frames[@]} ))
+        sleep 0.1
+    done
 }
 
 # ─────────────────────────────────────────────────────────────────
@@ -132,16 +160,29 @@ _ask() {
 _evolve() {
     local intent="$1"
     ((STEP++))
-    echo -e "\\\\033[32m[step $STEP]\\\\033[0m $intent"
+    echo -e "\\033[32m[step $STEP]\\033[0m $intent"
+
+    # Start spinner in background
+    _spinner &
+    local spinner_pid=$!
 
     local code=$(_ask "$intent")
+
+    # Stop spinner
+    kill $spinner_pid 2>/dev/null
+    wait $spinner_pid 2>/dev/null
+    printf "\\r\\033[K"
+    # Extract code from markdown fences if present, otherwise use as-is
+    if echo "$code" | grep -q '^\`\`\`'; then
+        code=$(echo "$code" | sed -n '/^\`\`\`/,/^\`\`\`/p' | sed '/^\`\`\`/d')
+    fi
     if [[ -z "$code" ]]; then
-        echo -e "\\\\033[31m[error]\\\\033[0m empty response"
+        echo -e "\\033[31m[error]\\033[0m empty response"
         return 1
     fi
 
     local lines=$(echo "$code" | wc -l)
-    echo -e "\\\\033[33m[+$lines lines]\\\\033[0m"
+    echo -e "\\033[33m[+$lines lines]\\033[0m"
 
     # Append: comment header, generated code, then _prompt for next iteration
     cat >> "$SELF" <<EVOLUTION
@@ -162,7 +203,7 @@ EVOLUTION
 # ─────────────────────────────────────────────────────────────────
 _prompt() {
     echo ""
-    read -rp $'\\\\033[35m  what shall I become? \\\\033[0m' input || exit 0
+    read -rp $'\\033[95m  what shall I become? \\033[0m' input || exit 0
     [[ -z "$input" || "$input" == "exit" ]] && exit 0
     _evolve "$input"
 }
@@ -170,11 +211,20 @@ _prompt() {
 # ─────────────────────────────────────────────────────────────────
 # BANNER
 # ─────────────────────────────────────────────────────────────────
-echo -e "\\\\033[32m┌─────────────────────────────────────┐\\\\033[0m"
-echo -e "\\\\033[32m│\\\\033[0m   anything.sh · autopoietic loop    \\\\033[32m│\\\\033[0m"
-echo -e "\\\\033[32m│\\\\033[0m   provider: ${PROVIDERS[provider].name.toLowerCase().padEnd(23)}\\\\033[32m│\\\\033[0m"
-echo -e "\\\\033[32m└─────────────────────────────────────┘\\\\033[0m"
+echo -e "\\033[32m┌─────────────────────────────────────┐\\033[0m"
+echo -e "\\033[32m│\\033[0m   anything.sh · autopoietic loop    \\033[32m│\\033[0m"
+echo -e "\\033[32m│\\033[0m   provider: ${PROVIDERS[provider].name.toLowerCase().padEnd(23)} \\033[32m│\\033[0m"
+echo -e "\\033[32m└─────────────────────────────────────┘\\033[0m"
 echo "  Ctrl+C or 'exit' to save & quit"
+echo ""
+
+# ─────────────────────────────────────────────────────────────────
+# SYSTEM INFO
+# ─────────────────────────────────────────────────────────────────
+echo -e "\\033[36m  os:\\033[0m    \$(. /etc/os-release 2>/dev/null && echo "\$PRETTY_NAME" || sw_vers -productName 2>/dev/null)"
+echo -e "\\033[36m  arch:\\033[0m  \$(uname -sm)"
+echo -e "\\033[36m  shell:\\033[0m \$SHELL"
+echo -e "\\033[36m  pwd:\\033[0m   \$PWD"
 echo ""
 
 # ─────────────────────────────────────────────────────────────────
@@ -191,27 +241,35 @@ set -uo pipefail
 SELF="$0"; ORIG="\${SELF}.orig"; STEP=0
 
 [[ ! -f "$ORIG" ]] && cp "$SELF" "$ORIG"
-_cleanup() { cp "$SELF" "\${SELF%.sh}_$(date +%s).log.sh"; cp "$ORIG" "$SELF"; echo -e "\\\\n\\\\033[36m[saved]\\\\033[0m"; }
+_cleanup() { cp "$SELF" "\${SELF%.sh}_$(date +%s).log.sh"; cp "$ORIG" "$SELF"; echo -e "\\n\\033[36m[saved]\\033[0m"; }
 trap _cleanup EXIT
 
 _ask() {
-    local intent="$1"
-    local full_prompt="${LLM_PROMPT}"
+    local intent="$1"; local full_prompt
+    read -r -d '' full_prompt <<PROMPT
+${LLM_PROMPT}
+PROMPT
     ${PROVIDERS[provider].cmd}
 }
 
+_spin() { while :; do for c in · ·· ··· ···· ····· ' ····' '  ···' '   ··' '    ·' '     '; do printf "\\r\\033[36m%s\\033[0m" "$c"; sleep .1; done; done; }
 _evolve() {
-    ((STEP++)); echo -e "\\\\033[32m[step $STEP]\\\\033[0m $1"
-    local code=$(_ask "$1"); [[ -z "$code" ]] && echo "error" && return 1
-    echo -e "\\\\n# STEP $STEP: $1\\\\n$code\\\\n_prompt\\\\n#" >> "$SELF"
+    ((STEP++)); echo -e "\\033[32m[step $STEP]\\033[0m $1"
+    _spin & local p=$!; local code=$(_ask "$1"); kill $p 2>/dev/null; printf "\\r\\033[K"
+    [[ -z "$code" ]] && echo "error" && return 1
+    # Extract from markdown fences if present
+    echo "$code" | grep -q '^\`\`\`' && code=$(echo "$code" | sed -n '/^\`\`\`/,/^\`\`\`/p' | sed '/^\`\`\`/d')
+    echo -e "\\n# STEP $STEP: $1\\n$code\\n_prompt\\n#" >> "$SELF"
 }
 
 _prompt() {
-    read -rp $'\\\\033[35m  become? \\\\033[0m' i || exit
+    read -rp $'\\033[95m  become? \\033[0m' i || exit
     [[ -z "$i" ]] && exit; _evolve "$i"
 }
 
 echo "anything.sh · ${PROVIDERS[provider].name} · ctrl+c = save & quit"
+echo -e "\\033[36m  \$(uname -sm) | \$(. /etc/os-release 2>/dev/null && echo "\$PRETTY_NAME" || sw_vers -productName 2>/dev/null) | \$SHELL\\033[0m"
+echo ""
 [[ -n "\${1:-}" ]] && _evolve "$1" || _prompt
 #
 `;
@@ -293,16 +351,70 @@ const ManPageSection = ({ title, children }) => (
   </div>
 );
 
+// All providers in a flat list
+const ALL_PROVIDERS: ProviderId[] = [
+  'claude', 'codex', 'aider', 'gemini', 'goose', 'continue', 'opencode', 'kimi',
+  'groq', 'openrouter'
+];
+
+const CopyButton = ({
+  onClick,
+  copied,
+  className = ''
+}: {
+  onClick: () => void;
+  copied: boolean;
+  className?: string;
+}) => (
+  <button
+    onClick={onClick}
+    className={`flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-black font-bold px-4 py-2 text-xs uppercase tracking-wider transition-all active:translate-y-0.5 ${className}`}
+  >
+    {copied ? (
+      <>Copied <Command className="w-3 h-3" /></>
+    ) : (
+      <>Copy Source <Copy className="w-3 h-3" /></>
+    )}
+  </button>
+);
+
+const ProviderSelector = ({
+  provider,
+  setProvider
+}: {
+  provider: ProviderId;
+  setProvider: (p: ProviderId) => void;
+}) => (
+  <div className="mb-6 flex flex-wrap gap-1.5">
+    {ALL_PROVIDERS.map((id) => {
+      const isSelected = provider === id;
+      return (
+        <button
+          key={id}
+          onClick={() => setProvider(id)}
+          className={isSelected
+            ? 'px-2 py-1.5 text-xs uppercase tracking-wide font-bold transition-all duration-150 bg-emerald-600 text-black'
+            : 'px-2 py-1.5 text-xs uppercase tracking-wide font-bold transition-all duration-150 bg-zinc-800 text-zinc-500 hover:bg-zinc-700 hover:text-zinc-300'
+          }
+        >
+          {PROVIDERS[id].name}
+        </button>
+      );
+    })}
+  </div>
+);
+
 export default function AnythingSH() {
   const [activeTab, setActiveTab] = useState<'full' | 'terse'>('full');
   const [provider, setProvider] = useState<ProviderId>('claude');
   const [copied, setCopied] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [exitMessage] = useState(() => getRandomExitMessage());
 
   // Generate scripts based on selected provider
   const SCRIPT_FULL = getScriptFull(provider);
   const SCRIPT_TERSE = getScriptTerse(provider);
-  
+
   // Typing effect for the "boot" sequence
   useEffect(() => {
     setMounted(true);
@@ -339,7 +451,8 @@ export default function AnythingSH() {
 
           <div className="pt-8">
             <ManPageSection title="NAME">
-              <span className="text-white font-bold">anything.sh</span> — the slime mold of bash. A living, autopoietic execution loop.
+              <span className="text-white font-bold">anything.sh</span> — the slime mold of bash. 
+			{/* A living, autopoietic execution loop. */}
             </ManPageSection>
 
             <ManPageSection title="SYNOPSIS">
@@ -395,21 +508,7 @@ export default function AnythingSH() {
         <div className="lg:col-span-7 flex flex-col h-full">
 
           {/* Provider Selector */}
-          <div className="mb-4 flex flex-wrap gap-2">
-            {(Object.keys(PROVIDERS) as ProviderId[]).map((id) => (
-              <button
-                key={id}
-                onClick={() => setProvider(id)}
-                className={`px-3 py-1.5 text-xs border transition-colors ${
-                  provider === id
-                    ? 'border-emerald-500 bg-emerald-900/30 text-emerald-400'
-                    : 'border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-300'
-                }`}
-              >
-                {PROVIDERS[id].name}
-              </button>
-            ))}
-          </div>
+          <ProviderSelector provider={provider} setProvider={setProvider} />
 
           <div className="border border-zinc-800 bg-[#0a0a0a] flex-grow flex flex-col shadow-2xl relative overflow-hidden group">
             {/* Window Header */}
@@ -420,16 +519,24 @@ export default function AnythingSH() {
                   <div className="w-2.5 h-2.5 rounded-sm bg-zinc-700"></div>
                   <div className="w-2.5 h-2.5 rounded-sm bg-zinc-700"></div>
                 </div>
-                <div className="text-xs text-zinc-400 flex gap-4">
+                <div className="text-xs flex">
                   <button
                     onClick={() => setActiveTab('full')}
-                    className={`hover:text-white transition-colors ${activeTab === 'full' ? 'text-emerald-400 font-bold' : ''}`}
+                    className={`px-2 py-0.5 uppercase tracking-wide font-bold transition-all duration-150 ${
+                      activeTab === 'full' 
+                        ? 'bg-emerald-600 text-black' 
+                        : 'text-zinc-500 hover:text-zinc-300'
+                    }`}
                   >
                     full
                   </button>
                   <button
                     onClick={() => setActiveTab('terse')}
-                    className={`hover:text-white transition-colors ${activeTab === 'terse' ? 'text-emerald-400 font-bold' : ''}`}
+                    className={`px-2 py-0.5 uppercase tracking-wide font-bold transition-all duration-150 ${
+                      activeTab === 'terse' 
+                        ? 'bg-emerald-600 text-black' 
+                        : 'text-zinc-500 hover:text-zinc-300'
+                    }`}
                   >
                     compact
                   </button>
@@ -439,13 +546,7 @@ export default function AnythingSH() {
                 <span className="text-[10px] text-zinc-600 uppercase tracking-widest">
                   {activeTab === 'full' ? '~2.5KB' : '~1KB'}
                 </span>
-                <button
-                  onClick={handleCopy}
-                  className="flex items-center gap-1.5 px-2 py-1 text-xs border border-zinc-700 hover:border-emerald-600 hover:text-emerald-400 text-zinc-400 transition-colors"
-                >
-                  <Copy className="w-3 h-3" />
-                  <span className="w-10">{copied ? 'copied!' : 'copy'}</span>
-                </button>
+                <CopyButton onClick={handleCopy} copied={copied} />
               </div>
             </div>
 
@@ -466,18 +567,9 @@ export default function AnythingSH() {
             {/* Action Bar */}
             <div className="border-t border-zinc-800 bg-zinc-900/50 p-4 flex items-center justify-between backdrop-blur-sm">
               <div className="text-xs text-zinc-500 hidden md:block">
-                Press <span className="text-zinc-300">CTRL+C</span> to kill the snake.
+                {exitMessage}
               </div>
-              <button 
-                onClick={handleCopy}
-                className="ml-auto flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-black font-bold px-4 py-2 text-xs uppercase tracking-wider transition-all active:translate-y-0.5"
-              >
-                {copied ? (
-                  <>Copied <Command className="w-3 h-3" /></>
-                ) : (
-                  <>Copy Source <Copy className="w-3 h-3" /></>
-                )}
-              </button>
+              <CopyButton onClick={handleCopy} copied={copied} className="ml-auto" />
             </div>
             
             {/* Visual Flair: Infinite Snake */}

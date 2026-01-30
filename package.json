@@ -6,7 +6,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bunx tailwindcss -i ./src/index.css -o ./src/output.css --watch & bun --hot src/index.ts",
+    "dev": "concurrently -k \"bunx tailwindcss -i ./src/index.css -o ./src/output.css --watch\" \"bun --hot src/index.ts\"",
     "build": "bunx tailwindcss -i ./src/index.css -o ./src/output.css && bun build ./src/index.html --outdir=dist --sourcemap --target=browser --minify --define:process.env.NODE_ENV='\"production\"' --env='BUN_PUBLIC_*'",
     "start": "NODE_ENV=production bun src/index.ts"
   },
@@ -20,6 +20,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "autoprefixer": "^10.4.23",
+    "concurrently": "^9.2.1",
     "figlet": "^1.10.0",
     "postcss": "^8.5.6",
     "tailwindcss": "3"
