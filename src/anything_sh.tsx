@@ -5,10 +5,12 @@ import { getRandomExitMessage } from './exitMessages';
 // Shared LLM prompt template (embedded in bash scripts)
 const LLM_PROMPT = `You are a bash code generator in an iterative execution loop.
 
-SYSTEM: \$(uname -sm) \$(. /etc/os-release 2>/dev/null && echo "\$PRETTY_NAME" || sw_vers -productName 2>/dev/null) | \$SHELL | \$PWD
-DISPLAY: \$([[ -n "\$WAYLAND_DISPLAY" ]] && echo "wayland:\$WAYLAND_DISPLAY" || [[ -n "\$DISPLAY" ]] && echo "x11:\$DISPLAY" || echo "none") \$([[ -n "\$SSH_TTY" ]] && echo "[ssh]")
+SYSTEM: \$(uname -sm) \$(. /etc/os-release 2>/dev/null && echo "\$PRETTY_NAME" || sw_vers -productName 2>/dev/null) | \$SHELL
+CWD: \$PWD
+DISPLAY: \$([[ -n "\${WAYLAND_DISPLAY:-}" ]] && echo "wayland:\$WAYLAND_DISPLAY" || [[ -n "\${DISPLAY:-}" ]] && echo "x11:\$DISPLAY" || echo "NONE")\$([[ -n "\${SSH_TTY:-}" ]] && echo " [ssh]")
 
 TASK: \$intent
+TURNS REMAINING: \$remaining (if 1-2, prioritize completing the task or informing user why it can't be done)
 \$feedback
 
 OUTPUT FORMAT (exactly 3 lines, then code):
@@ -23,6 +25,7 @@ RULES:
 - When FINAL: true, task is complete and user is prompted for next task
 - No markdown fences, no explanation outside the format above
 - Each code block should define and call step\${STEP}()
+- IMPORTANT: Use absolute paths or verify paths exist before running commands. CWD may not be where you expect.
 
 EXAMPLE (checking before installing):
 FINAL: false
@@ -76,7 +79,7 @@ const PROVIDERS = {
     name: 'Groq API',
     cmd: `curl -s https://api.groq.com/openai/v1/chat/completions \\
       -H "Authorization: Bearer $GROQ_API_KEY" -H "Content-Type: application/json" \\
-      -d "$(jq -n --arg p "$full_prompt" '{model:"llama-3.3-70b-versatile",messages:[{role:"user",content:$p}],temperature:0.7,max_tokens:4096}')" \\
+      -d "$(jq -n --arg p "$full_prompt" '{model:"openai/gpt-oss-120b",messages:[{role:"user",content:$p}],temperature:0.7,max_tokens:4096}')" \\
       | jq -r '.choices[0].message.content // empty'`,
   },
   openrouter: {
@@ -107,6 +110,7 @@ set -uo pipefail  # -e disabled: we handle errors manually
 SELF="$0"
 ORIG="\${SELF}.orig"
 STEP=0
+MAX_ITER=16  # Max LLM calls per task (increase for complex tasks)
 
 # ─────────────────────────────────────────────────────────────────
 # BACKUP: Save original on first run
@@ -135,6 +139,7 @@ trap _cleanup EXIT
 _ask() {
     local intent="$1"
     local feedback="\${2:-}"
+    local remaining="\${3:-?}"
     local full_prompt
     read -r -d '' full_prompt <<PROMPT
 ${LLM_PROMPT}
@@ -163,21 +168,21 @@ _evolve() {
     local intent="$1"
     local feedback=""
     local is_final="false"
-    local max_iterations=5
     local iteration=0
 
     # Remove trailing _prompt and # from script (so reruns replay without prompting)
     sed -i '/^_prompt$/,/^#$/d' "$SELF"
 
-    while [[ "$is_final" != "true" && $iteration -lt $max_iterations ]]; do
+    while [[ "$is_final" != "true" && $iteration -lt $MAX_ITER ]]; do
         ((iteration++))
         ((STEP++))
+        local remaining=$((MAX_ITER - iteration))
 
         # Start spinner
         _spinner &
         local spinner_pid=$!
 
-        local response=$(_ask "$intent" "$feedback")
+        local response=$(_ask "$intent" "$feedback" "$remaining")
 
         # Stop spinner
         kill $spinner_pid 2>/dev/null
@@ -215,25 +220,32 @@ _evolve() {
 
 # ═══════════════════════════════════════════════════════════════
 # STEP $STEP: $description
-# Generated: $(date '+%Y-%m-%d %H:%M:%S')
+# Generated: $(date '+%Y-%m-%d %H:%M:%S') | FINAL: $is_final
 # ═══════════════════════════════════════════════════════════════
 $code
 EVOLUTION
 
-        # Execute and capture output
+        # Execute with PTY (supports interactive programs like whiptail/dialog)
         echo -e "\\033[36m[running...]\\033[0m"
         local output exit_code
-        output=$( { eval "$code"; } 2>&1 )
-        exit_code=$?
-        echo "$output"
-        [[ $exit_code -ne 0 ]] && echo -e "\\033[31m[exit $exit_code]\\033[0m"
+        local tmpfile=\$(mktemp)
+        if [[ "\$(uname)" == "Darwin" ]]; then
+            script -q "\$tmpfile" bash -c "eval \\"\$code\\""
+        else
+            script -q -e -c "bash -c 'eval \\"\$code\\"'" "\$tmpfile"
+        fi
+        exit_code=\$?
+        # Clean ANSI codes for LLM feedback (script captures control sequences)
+        output=\$(perl -pe 's/\\e\\[[0-9;]*[mGKHJF]//g; s/\\r\\n/\\n/g; s/\\r//g' "\$tmpfile" 2>/dev/null || cat "\$tmpfile")
+        rm -f "\$tmpfile"
+        [[ \$exit_code -ne 0 ]] && echo -e "\\033[31m[exit \$exit_code]\\033[0m"
 
         if [[ "$is_final" != "true" ]]; then
             feedback="
 PREVIOUS STEP OUTPUT (exit code $exit_code):
 $output
 "
-        elif [[ $exit_code -ne 0 && $iteration -lt $max_iterations ]]; then
+        elif [[ $exit_code -ne 0 && $exit_code -ne 141 && $iteration -lt $MAX_ITER ]]; then
             # Final step failed - give LLM a chance to recover
             echo -e "\\033[33m[final step failed, attempting recovery...]\\033[0m"
             is_final="false"
@@ -246,12 +258,27 @@ Please diagnose the issue and fix it. You may need to install additional depende
         fi
     done
 
-    # Append _prompt for next user input
+    # Check if we hit max iterations without completing
+    if [[ "$is_final" != "true" ]]; then
+        echo -e "\\033[33m[max iterations reached]\\033[0m Task incomplete after $iteration steps."
+        read -rp $'\\033[95m  continue? [Y/n] \\033[0m' cont
+        if [[ -z "$cont" || "$cont" =~ ^[Yy] ]]; then
+            iteration=0
+            _evolve "$intent"  # Recursive call to continue
+            return
+        fi
+        echo -e "\\033[36m[stopped]\\033[0m You can retry or try a different approach."
+    fi
+
+    # Append _prompt for next user input (for re-runs of the script)
     cat >> "$SELF" <<'PROMPT_MARKER'
 
 _prompt
 #
 PROMPT_MARKER
+
+    # Continue interactive loop
+    _prompt
 }
 
 # ─────────────────────────────────────────────────────────────────
@@ -294,14 +321,14 @@ echo ""
 const getScriptTerse = (provider: ProviderId) => `#!/bin/bash
 # anything.sh [compact] · ${PROVIDERS[provider].name}
 set -uo pipefail
-SELF="$0"; ORIG="\${SELF}.orig"; STEP=0
+SELF="$0"; ORIG="\${SELF}.orig"; STEP=0; MAX_ITER=16
 
 [[ ! -f "$ORIG" ]] && cp "$SELF" "$ORIG"
 _cleanup() { cp "$SELF" "\${SELF%.sh}_$(date +%s).log.sh"; cp "$ORIG" "$SELF"; echo -e "\\n\\033[36m[saved]\\033[0m"; }
 trap _cleanup EXIT
 
 _ask() {
-    local intent="$1"; local feedback="\${2:-}"; local full_prompt
+    local intent="$1"; local feedback="\${2:-}"; local remaining="\${3:-?}"; local full_prompt
     read -r -d '' full_prompt <<PROMPT
 ${LLM_PROMPT}
 PROMPT
@@ -312,27 +339,36 @@ _spin() { while :; do for c in · ·· ··· ···· ····· ' ····' ' 
 _evolve() {
     local intent="$1" feedback="" is_final="false" iter=0
     sed -i '/^_prompt$/,/^#$/d' "$SELF"
-    while [[ "$is_final" != "true" && $iter -lt 5 ]]; do
-        ((iter++)); ((STEP++))
-        _spin & local p=$!; local resp=$(_ask "$intent" "$feedback"); kill $p 2>/dev/null; printf "\\r\\033[K"
+    while [[ "$is_final" != "true" && $iter -lt $MAX_ITER ]]; do
+        ((iter++)); ((STEP++)); local remaining=$((MAX_ITER - iter))
+        _spin & local p=$!; local resp=$(_ask "$intent" "$feedback" "$remaining"); kill $p 2>/dev/null; printf "\\r\\033[K"
         is_final=$(echo "$resp" | grep -i '^FINAL:' | head -1 | sed 's/^FINAL:[[:space:]]*//' | tr '[:upper:]' '[:lower:]')
         local desc=$(echo "$resp" | grep -i '^DESCRIPTION:' | head -1 | sed 's/^DESCRIPTION:[[:space:]]*//')
         local code=$(echo "$resp" | sed -n '/^BASH_CODE:/,$ { /^BASH_CODE:/d; p }')
         [[ -z "$code" ]] && code="$resp" && desc="$intent" && is_final="true"
         echo "$code" | grep -q '^\`\`\`' && code=$(echo "$code" | sed -n '/^\`\`\`/,/^\`\`\`/p' | sed '/^\`\`\`/d')
         echo -e "\\033[32m[step $STEP]\\033[0m $desc"
-        echo -e "\\n# STEP $STEP: $desc\\n$code" >> "$SELF"
+        echo -e "\\n# STEP $STEP: $desc | FINAL: $is_final\\n$code" >> "$SELF"
         echo -e "\\033[36m[running...]\\033[0m"
-        local out; out=$( { eval "$code"; } 2>&1 ); local rc=$?
-        echo "$out"; [[ $rc -ne 0 ]] && echo -e "\\033[31m[exit $rc]\\033[0m"
+        local out rc tmpf=\$(mktemp)
+        if [[ "\$(uname)" == "Darwin" ]]; then script -q "\$tmpf" bash -c "eval \\"\$code\\""; else script -q -e -c "bash -c 'eval \\"\$code\\"'" "\$tmpf"; fi
+        rc=\$?; out=\$(perl -pe 's/\\e\\[[0-9;]*[mGKHJF]//g; s/\\r//g' "\$tmpf" 2>/dev/null || cat "\$tmpf"); rm -f "\$tmpf"
+        [[ \$rc -ne 0 ]] && echo -e "\\033[31m[exit \$rc]\\033[0m"
         if [[ "$is_final" != "true" ]]; then
             feedback="\\nPREVIOUS OUTPUT (exit $rc):\\n$out\\n"
-        elif [[ $rc -ne 0 && $iter -lt 5 ]]; then
+        elif [[ $rc -ne 0 && $rc -ne 141 && $iter -lt $MAX_ITER ]]; then
             echo -e "\\033[33m[recovery...]\\033[0m"; is_final="false"
             feedback="\\nFINAL FAILED (exit $rc):\\n$out\\nPlease fix.\\n"
         fi
     done
+    if [[ "$is_final" != "true" ]]; then
+        echo -e "\\033[33m[max iterations]\\033[0m Incomplete after $iter steps."
+        read -rp $'\\033[95m  continue? [Y/n] \\033[0m' c
+        if [[ -z "$c" || "$c" =~ ^[Yy] ]]; then iter=0; _evolve "$intent"; return; fi
+        echo -e "\\033[36m[stopped]\\033[0m"
+    fi
     echo -e "\\n_prompt\\n#" >> "$SELF"
+    _prompt
 }
 
 _prompt() {
