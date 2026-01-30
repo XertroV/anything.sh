@@ -1,52 +1,77 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Terminal, Copy, ShieldAlert, FileCode, Skull, Zap, Eye, Command } from 'lucide-react';
 
+// Shared LLM prompt template (embedded in bash scripts)
+const LLM_PROMPT = `You are part of an AUTOPOIETIC, SELF-MODIFYING EXECUTION LOOP.
+
+This bash script appends your output to itself and executes it immediately.
+
+TASK: \$intent
+
+OUTPUT FORMAT - You MUST output:
+1. Any helper functions needed (optional)
+2. A main function named step\${STEP} that implements the task
+3. A call to that function
+
+Example:
+deps_step\${STEP}() { echo "helper"; }
+step\${STEP}() { deps_step\${STEP}; echo "doing task"; }
+step\${STEP}
+
+RULES:
+- Output ONLY valid bash code - NO markdown, NO explanation, NO \\\`\\\`\\\`
+- Your code is appended to this script and runs immediately
+- Available: _ask, _evolve, _prompt, _cleanup
+- Current STEP: \$STEP
+- Script has \$(wc -l < "\$SELF") lines`;
+
 // LLM CLI Provider configurations
 const PROVIDERS = {
   claude: {
     name: 'Claude Code',
     cmd: 'claude -p "$full_prompt" --dangerously-skip-permissions 2>/dev/null',
-    cmdTerse: 'claude -p "$1" --dangerously-skip-permissions',
   },
   codex: {
     name: 'OpenAI Codex',
     cmd: 'codex exec "$full_prompt" --full-auto 2>/dev/null',
-    cmdTerse: 'codex exec "$1" --full-auto',
   },
   aider: {
     name: 'Aider',
     cmd: 'aider --message "$full_prompt" --yes --no-stream 2>/dev/null',
-    cmdTerse: 'aider --message "$1" --yes --no-stream',
   },
   gemini: {
     name: 'Gemini CLI',
     cmd: 'gemini -p "$full_prompt" 2>/dev/null',
-    cmdTerse: 'gemini -p "$1"',
   },
   goose: {
     name: 'Goose',
     cmd: 'goose run -t "$full_prompt" 2>/dev/null',
-    cmdTerse: 'goose run -t "$1"',
   },
   continue: {
     name: 'Continue',
     cmd: 'cn -p "$full_prompt" --allow Write --allow Bash 2>/dev/null',
-    cmdTerse: 'cn -p "$1" --allow Write --allow Bash',
   },
   opencode: {
     name: 'OpenCode',
     cmd: 'opencode run "$full_prompt" 2>/dev/null',
-    cmdTerse: 'opencode run "$1"',
   },
   kimi: {
     name: 'Kimi CLI',
     cmd: 'kimi --print --command "$full_prompt" 2>/dev/null',
-    cmdTerse: 'kimi --print --command "$1"',
   },
-  api: {
-    name: 'Direct API',
-    cmd: `curl -s https://api.anthropic.com/v1/messages -H "x-api-key: $ANTHROPIC_API_KEY" -H "anthropic-version: 2023-06-01" -H "content-type: application/json" -d '{"model":"claude-sonnet-4-20250514","max_tokens":4096,"messages":[{"role":"user","content":"'"$full_prompt"'"}]}' | jq -r '.content[0].text'`,
-    cmdTerse: `curl -s https://api.anthropic.com/v1/messages -H "x-api-key: $ANTHROPIC_API_KEY" -H "anthropic-version: 2023-06-01" -H "content-type: application/json" -d '{"model":"claude-sonnet-4-20250514","max_tokens":1024,"messages":[{"role":"user","content":"'"$1"'"}]}' | jq -r '.content[0].text'`,
+  groq: {
+    name: 'Groq API',
+    cmd: `curl -s https://api.groq.com/openai/v1/chat/completions \\
+      -H "Authorization: Bearer $GROQ_API_KEY" -H "Content-Type: application/json" \\
+      -d "$(jq -n --arg p "$full_prompt" '{model:"llama-3.3-70b-versatile",messages:[{role:"user",content:$p}],temperature:0.7,max_tokens:4096}')" \\
+      | jq -r '.choices[0].message.content // empty'`,
+  },
+  openrouter: {
+    name: 'OpenRouter',
+    cmd: `curl -s https://openrouter.ai/api/v1/chat/completions \\
+      -H "Authorization: Bearer $OPENROUTER_API_KEY" -H "Content-Type: application/json" \\
+      -d "$(jq -n --arg p "$full_prompt" '{model:"anthropic/claude-3.5-sonnet",messages:[{role:"user",content:$p}],max_tokens:4096}')" \\
+      | jq -r '.choices[0].message.content // empty'`,
   },
 } as const;
 
@@ -55,20 +80,20 @@ type ProviderId = keyof typeof PROVIDERS;
 // Generate full script with provider-specific CLI command
 const getScriptFull = (provider: ProviderId) => `#!/bin/bash
 # ╔════════════════════════════════════════════════════════════════╗
-# ║  anything.sh - The Ouroboros Script                            ║
-# ║  A self-modifying bash script that grows with each command.    ║
+# ║  anything.sh - Autopoietic Self-Modifying Execution Loop       ║
+# ║  A script that evolves by appending LLM-generated code.        ║
 # ║  Provider: ${PROVIDERS[provider].name.padEnd(49)}║
 # ╚════════════════════════════════════════════════════════════════╝
 # USAGE: ./anything.sh ["initial prompt"]
 
-set -euo pipefail
+set -uo pipefail  # -e disabled: we handle errors manually
 
 # ─────────────────────────────────────────────────────────────────
 # CONFIGURATION
 # ─────────────────────────────────────────────────────────────────
 SELF="$0"
 ORIG="\${SELF}.orig"
-INJECT_MARKER="# @@INJECT@@"
+STEP=0
 
 # ─────────────────────────────────────────────────────────────────
 # BACKUP: Save original on first run
@@ -96,45 +121,40 @@ trap _cleanup EXIT
 # ─────────────────────────────────────────────────────────────────
 _ask() {
     local intent="$1"
-    # Get script up to injection marker (the "static" part)
-    local ctx=$(sed -n "1,/$INJECT_MARKER/p" "$SELF" 2>/dev/null | head -n -1)
-
-    local full_prompt="You are extending a self-modifying bash script.
-
-TASK: $intent
-
-RULES:
-- Output ONLY valid bash code, no markdown, no explanation
-- Code will be appended and executed immediately
-- You may call existing functions: _ask, _evolve, _prompt
-
-CURRENT SCRIPT:
-\`\`\`bash
-$ctx
-\`\`\`"
+    local full_prompt="${LLM_PROMPT}"
 
     ${PROVIDERS[provider].cmd}
 }
 
 # ─────────────────────────────────────────────────────────────────
-# EVOLVE: Generate code and inject before marker
+# EVOLVE: Append generated code to script
 # ─────────────────────────────────────────────────────────────────
 _evolve() {
     local intent="$1"
-    echo -e "\\\\033[32m[evolving]\\\\033[0m $intent"
+    ((STEP++))
+    echo -e "\\\\033[32m[step $STEP]\\\\033[0m $intent"
 
     local code=$(_ask "$intent")
-    [[ -z "$code" ]] && echo -e "\\\\033[31m[error]\\\\033[0m empty response" && return 1
+    if [[ -z "$code" ]]; then
+        echo -e "\\\\033[31m[error]\\\\033[0m empty response"
+        return 1
+    fi
 
-    echo -e "\\\\033[33m[+$(echo "$code" | wc -l) lines]\\\\033[0m"
+    local lines=$(echo "$code" | wc -l)
+    echo -e "\\\\033[33m[+$lines lines]\\\\033[0m"
 
-    # Inject code before the marker
-    local tmp=$(mktemp)
-    awk -v code="$code" -v marker="$INJECT_MARKER" '
-        $0 == marker { print "# --- [" strftime("%H:%M:%S") "] ---"; print code; print "_prompt"; print "" }
-        { print }
-    ' "$SELF" > "$tmp" && mv "$tmp" "$SELF"
-    chmod +x "$SELF"
+    # Append: comment header, generated code, then _prompt for next iteration
+    cat >> "$SELF" <<EVOLUTION
+
+# ═══════════════════════════════════════════════════════════════
+# STEP $STEP: $intent
+# Generated: $(date '+%Y-%m-%d %H:%M:%S')
+# ═══════════════════════════════════════════════════════════════
+$code
+
+_prompt
+#
+EVOLUTION
 }
 
 # ─────────────────────────────────────────────────────────────────
@@ -151,7 +171,7 @@ _prompt() {
 # BANNER
 # ─────────────────────────────────────────────────────────────────
 echo -e "\\\\033[32m┌─────────────────────────────────────┐\\\\033[0m"
-echo -e "\\\\033[32m│\\\\033[0m   anything.sh · ouroboros protocol  \\\\033[32m│\\\\033[0m"
+echo -e "\\\\033[32m│\\\\033[0m   anything.sh · autopoietic loop    \\\\033[32m│\\\\033[0m"
 echo -e "\\\\033[32m│\\\\033[0m   provider: ${PROVIDERS[provider].name.toLowerCase().padEnd(23)}\\\\033[32m│\\\\033[0m"
 echo -e "\\\\033[32m└─────────────────────────────────────┘\\\\033[0m"
 echo "  Ctrl+C or 'exit' to save & quit"
@@ -161,64 +181,39 @@ echo ""
 # ENTRY: Handle initial prompt or start interactive
 # ─────────────────────────────────────────────────────────────────
 [[ -n "\${1:-}" ]] && _evolve "$1" || _prompt
-
-$INJECT_MARKER
-# ─────────────────────────────────────────────────────────────────
-# GENERATED CODE APPEARS ABOVE THIS LINE
-# ─────────────────────────────────────────────────────────────────
+#
 `;
 
 // Generate compact script with provider-specific CLI command
 const getScriptTerse = (provider: ProviderId) => `#!/bin/bash
-# anything.sh [compact] - ${PROVIDERS[provider].name}
-set -euo pipefail
+# anything.sh [compact] · ${PROVIDERS[provider].name}
+set -uo pipefail
+SELF="$0"; ORIG="\${SELF}.orig"; STEP=0
 
-SELF="$0"; ORIG="\${SELF}.orig"; MARKER="# @@INJECT@@"
-
-# Backup original
 [[ ! -f "$ORIG" ]] && cp "$SELF" "$ORIG"
+_cleanup() { cp "$SELF" "\${SELF%.sh}_$(date +%s).log.sh"; cp "$ORIG" "$SELF"; echo -e "\\\\n\\\\033[36m[saved]\\\\033[0m"; }
+trap _cleanup EXIT
 
-# Cleanup on exit: archive + restore
-cleanup() {
-    cp "$SELF" "\${SELF%.sh}_$(date +%s).log.sh" 2>/dev/null || true
-    cp "$ORIG" "$SELF" 2>/dev/null || true
-    echo -e "\\\\n\\\\033[36m[saved & restored]\\\\033[0m"
-}
-trap cleanup EXIT
-
-# Query LLM
-ask() {
-    local ctx=$(sed -n "1,/$MARKER/p" "$SELF" | head -n -1)
-    local full_prompt="Extend this bash script: $1
-
-Output ONLY bash code.
-
-SCRIPT:
-$ctx"
+_ask() {
+    local intent="$1"
+    local full_prompt="${LLM_PROMPT}"
     ${PROVIDERS[provider].cmd}
 }
 
-# Evolve: inject code before marker
-evolve() {
-    echo -e "\\\\033[32m[>]\\\\033[0m $1"
-    local code=$(ask "$1")
-    [[ -z "$code" ]] && echo "error: empty" && return 1
-    local tmp=$(mktemp)
-    awk -v c="$code" -v m="$MARKER" '$0==m{print"# ---";print c;print"prompt"}1' "$SELF" > "$tmp"
-    mv "$tmp" "$SELF"; chmod +x "$SELF"
+_evolve() {
+    ((STEP++)); echo -e "\\\\033[32m[step $STEP]\\\\033[0m $1"
+    local code=$(_ask "$1"); [[ -z "$code" ]] && echo "error" && return 1
+    echo -e "\\\\n# STEP $STEP: $1\\\\n$code\\\\n_prompt\\\\n#" >> "$SELF"
 }
 
-# Interactive prompt
-prompt() {
+_prompt() {
     read -rp $'\\\\033[35m  become? \\\\033[0m' i || exit
-    [[ -z "$i" ]] && exit
-    evolve "$i"
+    [[ -z "$i" ]] && exit; _evolve "$i"
 }
 
-echo "anything.sh | ${PROVIDERS[provider].name} | ctrl+c to quit"
-[[ -n "\${1:-}" ]] && evolve "$1" || prompt
-
-$MARKER
+echo "anything.sh · ${PROVIDERS[provider].name} · ctrl+c = save & quit"
+[[ -n "\${1:-}" ]] && _evolve "$1" || _prompt
+#
 `;
 
 const ASCII_LOGO = `
@@ -338,28 +333,43 @@ export default function AnythingSH() {
             </pre>
             <div className="flex items-center gap-3">
               <span className="bg-emerald-900/30 text-emerald-400 border border-emerald-800/50 px-2 py-0.5 text-xs uppercase tracking-wider">v0.1.0-alpha</span>
-              <span className="text-zinc-500 text-xs uppercase">Bash Self-Replication Protocol</span>
+              <span className="text-zinc-500 text-xs uppercase">Autopoietic Execution Loop</span>
             </div>
           </div>
 
           <div className="pt-8">
             <ManPageSection title="NAME">
-              <span className="text-white font-bold">anything.sh</span> — a recursive, self-modifying shell agent.
+              <span className="text-white font-bold">anything.sh</span> — the slime mold of bash. A living, autopoietic execution loop.
             </ManPageSection>
 
             <ManPageSection title="SYNOPSIS">
-              <span className="text-emerald-400">./anything.sh</span> [<span className="text-zinc-500 underline">initial_prompt</span>]
+              <span className="text-emerald-400">./anything.sh</span> [<span className="text-zinc-500 underline">"become something"</span>]
             </ManPageSection>
 
             <ManPageSection title="DESCRIPTION">
               <p className="mb-4">
-                <span className="text-white">anything.sh</span> is a bash script that writes its own source code during execution.
+                In nature, the slime mold has no brain, no blueprint, no plan. Yet it solves mazes, optimises railway networks, and exhibits a form of memory. It doesn't follow a path — it <span className="text-emerald-400 italic">becomes</span> the path.
               </p>
               <p className="mb-4">
-                It utilizes the <span className="text-white">claude</span> CLI to generate bash commands based on user intent. These commands are appended to the script file itself (Ouroboros pattern) and executed immediately by the running interpreter.
+                <span className="text-white">anything.sh</span> is that, but worse. It's a bash script that rewrites itself while running. You type a request. It consults an LLM. The response — raw, executable bash — gets <span className="italic">appended to the script's own body</span> and executed immediately.
+              </p>
+              <p className="mb-4">
+                The script grows. It <span className="text-emerald-400">pulses</span>. It reaches toward your intent like cytoplasm flowing toward food. One moment it's 50 lines. Then it's 200. Then it's whatever it needs to be.
+              </p>
+              <p className="mb-4 text-zinc-500 italic">
+                "Traditional automation is a machine," the naturalist observed, lowering his voice so as not to startle it. "But this... this is <span className="text-white">biological logic</span>."
               </p>
               <p>
-                The script effectively functions as an infinite snake, growing longer with every command you issue, creating a permanent audit trail of its own evolution.
+                When you press Ctrl+C, the evolved script is archived (a fossil record of computation) and the original is restored. The loop closes. <span className="text-zinc-500">Until next time.</span>
+              </p>
+            </ManPageSection>
+
+            <ManPageSection title="PHILOSOPHY">
+              <p className="mb-4">
+                We spent decades writing "perfect" code. Optimising, refactoring, unit testing. <span className="text-white">anything.sh</span> asks: what if we simply <span className="italic">grew</span> the code instead?
+              </p>
+              <p className="text-zinc-500 italic">
+                It's not written. It's <span className="text-emerald-400">grown</span>.
               </p>
             </ManPageSection>
 
@@ -367,15 +377,16 @@ export default function AnythingSH() {
               <div className="flex gap-4 items-start bg-amber-950/20 p-4 border border-amber-900/50 text-amber-500/90 text-xs">
                 <ShieldAlert className="w-5 h-5 flex-shrink-0 mt-0.5" />
                 <div>
-                  <strong className="block mb-1 text-amber-400 uppercase tracking-wide">Dangerously Skip Permissions</strong>
-                  This script invokes Claude with <code className="bg-amber-900/40 px-1 text-amber-200">--dangerously-skip-permissions</code>. It will execute file deletions, system modifications, and network requests without confirmation. Use inside a VM or container.
+                  <strong className="block mb-1 text-amber-400 uppercase tracking-wide">Here Be Dragons</strong>
+                  This script executes LLM-generated code <span className="text-amber-200">without confirmation</span>. It will cheerfully delete your files, email your boss, or reorganise your music collection by astrological sign. The slime mold does not ask permission. <span className="text-amber-200">Use in a VM or container.</span>
                 </div>
               </div>
             </ManPageSection>
             
-            <div className="pt-12 text-zinc-600 text-xs">
+            <div className="pt-12 text-zinc-600 text-xs space-y-1">
               <p>AUTHOR: XertroV</p>
               <p>LICENSE: Unlicense (Public Domain)</p>
+              <p className="text-zinc-700 italic pt-2">No slime molds were harmed in the making of this script.</p>
             </div>
           </div>
         </div>
