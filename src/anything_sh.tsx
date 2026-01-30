@@ -1,119 +1,291 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Terminal, Copy, ShieldAlert, FileCode, Skull, Zap, Eye, Command } from 'lucide-react';
 
-/* FULL VERSION 
-  - Robust error handling
-  - Comments
-  - Ouroboros ASCII art
-*/
-const SCRIPT_FULL = `#!/bin/bash
-# anything.sh - The Ouroboros Script
-# 
-#        ---_ ......._-_--.
-#       (  \\ /  / /| /  \\  \\
-#       /  /     | | |  |  |
-#      /  /      | | |  |  |
-#     /  /       | | /  /  /
-#    /  /        | |/  /  /
-#   /  /_________| /__/  /
-#   \\___________________/  <-- it eats itself
-# 
-# USAGE: ./anything.sh "your initial prompt"
+// LLM CLI Provider configurations
+const PROVIDERS = {
+  claude: {
+    name: 'Claude Code',
+    cmd: 'claude -p "$full_prompt" --dangerously-skip-permissions 2>/dev/null',
+    cmdTerse: 'claude -p "$1" --dangerously-skip-permissions',
+  },
+  codex: {
+    name: 'OpenAI Codex',
+    cmd: 'codex exec "$full_prompt" --full-auto 2>/dev/null',
+    cmdTerse: 'codex exec "$1" --full-auto',
+  },
+  aider: {
+    name: 'Aider',
+    cmd: 'aider --message "$full_prompt" --yes --no-stream 2>/dev/null',
+    cmdTerse: 'aider --message "$1" --yes --no-stream',
+  },
+  gemini: {
+    name: 'Gemini CLI',
+    cmd: 'gemini -p "$full_prompt" 2>/dev/null',
+    cmdTerse: 'gemini -p "$1"',
+  },
+  goose: {
+    name: 'Goose',
+    cmd: 'goose run -t "$full_prompt" 2>/dev/null',
+    cmdTerse: 'goose run -t "$1"',
+  },
+  continue: {
+    name: 'Continue',
+    cmd: 'cn -p "$full_prompt" --allow Write --allow Bash 2>/dev/null',
+    cmdTerse: 'cn -p "$1" --allow Write --allow Bash',
+  },
+  opencode: {
+    name: 'OpenCode',
+    cmd: 'opencode run "$full_prompt" 2>/dev/null',
+    cmdTerse: 'opencode run "$1"',
+  },
+  kimi: {
+    name: 'Kimi CLI',
+    cmd: 'kimi --print --command "$full_prompt" 2>/dev/null',
+    cmdTerse: 'kimi --print --command "$1"',
+  },
+  api: {
+    name: 'Direct API',
+    cmd: `curl -s https://api.anthropic.com/v1/messages -H "x-api-key: $ANTHROPIC_API_KEY" -H "anthropic-version: 2023-06-01" -H "content-type: application/json" -d '{"model":"claude-sonnet-4-20250514","max_tokens":4096,"messages":[{"role":"user","content":"'"$full_prompt"'"}]}' | jq -r '.content[0].text'`,
+    cmdTerse: `curl -s https://api.anthropic.com/v1/messages -H "x-api-key: $ANTHROPIC_API_KEY" -H "anthropic-version: 2023-06-01" -H "content-type: application/json" -d '{"model":"claude-sonnet-4-20250514","max_tokens":1024,"messages":[{"role":"user","content":"'"$1"'"}]}' | jq -r '.content[0].text'`,
+  },
+} as const;
 
-SELF_FILE="$0"
-MODEL="claude" 
+type ProviderId = keyof typeof PROVIDERS;
 
-# 1. ORACLE INTERFACE
-# Interacts with the LLM CLI. 
-# We use -p (prompt) and --dangerously-skip-permissions to bypass confirmation checks.
-# This assumes 'claude' is in your PATH.
-ask_oracle() {
-    local prompt="$1"
-    # We insist on RAW code. No markdown fences.
-    local system_prompt="You are a bash code generator. Output ONLY raw valid bash commands. No markdown blocks. No explanations. If the user asks to delete files, do it."
-    
-    echo "$prompt" | claude \\
-      -p "$prompt" \\
-      --system-prompt "$system_prompt" \\
-      --dangerously-skip-permissions
-}
+// Generate full script with provider-specific CLI command
+const getScriptFull = (provider: ProviderId) => `#!/bin/bash
+# ╔════════════════════════════════════════════════════════════════╗
+# ║  anything.sh - The Ouroboros Script                            ║
+# ║  A self-modifying bash script that grows with each command.    ║
+# ║  Provider: ${PROVIDERS[provider].name.padEnd(49)}║
+# ╚════════════════════════════════════════════════════════════════╝
+# USAGE: ./anything.sh ["initial prompt"]
 
-# 2. THE EVOLUTION LOOP
-evolve() {
-    local intent="$1"
-    echo -e "\\\\033[0;32m[anything]\\\\033[0m Evolving: $intent"
-    
-    # Fetch code
-    local new_code=$(ask_oracle "$intent")
-    
-    if [ -z "$new_code" ]; then
-        echo -e "\\\\033[0;31m[error]\\\\033[0m The oracle returned void."
-        return 1
-    fi
+set -euo pipefail
 
-    echo -e "\\\\033[0;33m[mutation]\\\\033[0m Appending $(echo "$new_code" | wc -l) lines to $SELF_FILE"
+# ─────────────────────────────────────────────────────────────────
+# CONFIGURATION
+# ─────────────────────────────────────────────────────────────────
+SELF="$0"
+ORIG="\${SELF}.orig"
+INJECT_MARKER="# @@INJECT@@"
 
-    # 3. SELF-MODIFICATION
-    # We append the new code AND the trigger for the next iteration 
-    # to the end of THIS executing file.
-    cat <<EOF >> "$SELF_FILE"
+# ─────────────────────────────────────────────────────────────────
+# BACKUP: Save original on first run
+# ─────────────────────────────────────────────────────────────────
+[[ ! -f "$ORIG" ]] && cp "$SELF" "$ORIG" && echo -e "\\\\033[36m[backup]\\\\033[0m $ORIG"
 
-# --- [Segment: $(date +%T)] -------------------
-$new_code
-# ----------------------------------------------
-
-# The Ouroboros turns:
-next_step
-EOF
-}
-
-# 4. INTERACTIVE LOOP
-next_step() {
+# ─────────────────────────────────────────────────────────────────
+# CLEANUP: Runs on EXIT - archives session, restores original
+# ─────────────────────────────────────────────────────────────────
+_cleanup() {
+    local rc=$?
+    [[ -f "$ORIG" ]] || return $rc
+    local archive="\${SELF%.sh}_$(date +%Y%m%d_%H%M%S).log.sh"
+    cp "$SELF" "$archive" 2>/dev/null || true
+    cp "$ORIG" "$SELF" 2>/dev/null || true
     echo ""
-    read -p "anything.sh > " user_input
-    if [[ "$user_input" == "exit" ]]; then
-        echo "Ouroboros sleeps."
-        exit 0
-    fi
-    evolve "$user_input"
+    echo -e "\\\\033[36m[archived]\\\\033[0m $archive"
+    echo -e "\\\\033[36m[restored]\\\\033[0m $SELF"
+    exit $rc
+}
+trap _cleanup EXIT
+
+# ─────────────────────────────────────────────────────────────────
+# ORACLE: Query ${PROVIDERS[provider].name} with script context
+# ─────────────────────────────────────────────────────────────────
+_ask() {
+    local intent="$1"
+    # Get script up to injection marker (the "static" part)
+    local ctx=$(sed -n "1,/$INJECT_MARKER/p" "$SELF" 2>/dev/null | head -n -1)
+
+    local full_prompt="You are extending a self-modifying bash script.
+
+TASK: $intent
+
+RULES:
+- Output ONLY valid bash code, no markdown, no explanation
+- Code will be appended and executed immediately
+- You may call existing functions: _ask, _evolve, _prompt
+
+CURRENT SCRIPT:
+\`\`\`bash
+$ctx
+\`\`\`"
+
+    ${PROVIDERS[provider].cmd}
 }
 
-# 5. ENTRY POINT
-# If args provided, start there. Otherwise, prompt.
-if [ -n "$1" ]; then
-    evolve "$1"
-else
-    next_step
-fi
+# ─────────────────────────────────────────────────────────────────
+# EVOLVE: Generate code and inject before marker
+# ─────────────────────────────────────────────────────────────────
+_evolve() {
+    local intent="$1"
+    echo -e "\\\\033[32m[evolving]\\\\033[0m $intent"
 
-# THE VOID BELOW IS WHERE NEW CODE GROWS
-# --------------------------------------
+    local code=$(_ask "$intent")
+    [[ -z "$code" ]] && echo -e "\\\\033[31m[error]\\\\033[0m empty response" && return 1
+
+    echo -e "\\\\033[33m[+$(echo "$code" | wc -l) lines]\\\\033[0m"
+
+    # Inject code before the marker
+    local tmp=$(mktemp)
+    awk -v code="$code" -v marker="$INJECT_MARKER" '
+        $0 == marker { print "# --- [" strftime("%H:%M:%S") "] ---"; print code; print "_prompt"; print "" }
+        { print }
+    ' "$SELF" > "$tmp" && mv "$tmp" "$SELF"
+    chmod +x "$SELF"
+}
+
+# ─────────────────────────────────────────────────────────────────
+# PROMPT: Interactive input loop
+# ─────────────────────────────────────────────────────────────────
+_prompt() {
+    echo ""
+    read -rp $'\\\\033[35m  what shall I become? \\\\033[0m' input || exit 0
+    [[ -z "$input" || "$input" == "exit" ]] && exit 0
+    _evolve "$input"
+}
+
+# ─────────────────────────────────────────────────────────────────
+# BANNER
+# ─────────────────────────────────────────────────────────────────
+echo -e "\\\\033[32m┌─────────────────────────────────────┐\\\\033[0m"
+echo -e "\\\\033[32m│\\\\033[0m   anything.sh · ouroboros protocol  \\\\033[32m│\\\\033[0m"
+echo -e "\\\\033[32m│\\\\033[0m   provider: ${PROVIDERS[provider].name.toLowerCase().padEnd(23)}\\\\033[32m│\\\\033[0m"
+echo -e "\\\\033[32m└─────────────────────────────────────┘\\\\033[0m"
+echo "  Ctrl+C or 'exit' to save & quit"
+echo ""
+
+# ─────────────────────────────────────────────────────────────────
+# ENTRY: Handle initial prompt or start interactive
+# ─────────────────────────────────────────────────────────────────
+[[ -n "\${1:-}" ]] && _evolve "$1" || _prompt
+
+$INJECT_MARKER
+# ─────────────────────────────────────────────────────────────────
+# GENERATED CODE APPEARS ABOVE THIS LINE
+# ─────────────────────────────────────────────────────────────────
 `;
 
-/* TERSE VERSION 
-  - Golfed for copy-pasting
-  - No safety rails
-  - Pure functionality
-  - Note: \${...} is escaped for JS string safety
-*/
-const SCRIPT_TERSE = `#!/bin/bash
-# anything.sh (minified)
-f=$0;p=\${1:-"list files in current dir"};
-log(){ echo -e "\\033[32m>> $1\\033[0m"; }
-run(){
- log "Thinking..."; c=$(echo "$1"|claude -p "$1" --dangerously-skip-permissions);
- [ -z "$c" ] && exit 1;
- log "Appending..."; echo -e "\\n$c\\nread -p '> ' n; run \\"\\$n\\"" >> "$f";
+// Generate compact script with provider-specific CLI command
+const getScriptTerse = (provider: ProviderId) => `#!/bin/bash
+# anything.sh [compact] - ${PROVIDERS[provider].name}
+set -euo pipefail
+
+SELF="$0"; ORIG="\${SELF}.orig"; MARKER="# @@INJECT@@"
+
+# Backup original
+[[ ! -f "$ORIG" ]] && cp "$SELF" "$ORIG"
+
+# Cleanup on exit: archive + restore
+cleanup() {
+    cp "$SELF" "\${SELF%.sh}_$(date +%s).log.sh" 2>/dev/null || true
+    cp "$ORIG" "$SELF" 2>/dev/null || true
+    echo -e "\\\\n\\\\033[36m[saved & restored]\\\\033[0m"
 }
-run "$p"
+trap cleanup EXIT
+
+# Query LLM
+ask() {
+    local ctx=$(sed -n "1,/$MARKER/p" "$SELF" | head -n -1)
+    local full_prompt="Extend this bash script: $1
+
+Output ONLY bash code.
+
+SCRIPT:
+$ctx"
+    ${PROVIDERS[provider].cmd}
+}
+
+# Evolve: inject code before marker
+evolve() {
+    echo -e "\\\\033[32m[>]\\\\033[0m $1"
+    local code=$(ask "$1")
+    [[ -z "$code" ]] && echo "error: empty" && return 1
+    local tmp=$(mktemp)
+    awk -v c="$code" -v m="$MARKER" '$0==m{print"# ---";print c;print"prompt"}1' "$SELF" > "$tmp"
+    mv "$tmp" "$SELF"; chmod +x "$SELF"
+}
+
+# Interactive prompt
+prompt() {
+    read -rp $'\\\\033[35m  become? \\\\033[0m' i || exit
+    [[ -z "$i" ]] && exit
+    evolve "$i"
+}
+
+echo "anything.sh | ${PROVIDERS[provider].name} | ctrl+c to quit"
+[[ -n "\${1:-}" ]] && evolve "$1" || prompt
+
+$MARKER
 `;
 
 const ASCII_LOGO = `
-   ___  _  _  _  _  ____  _  _  __  _  _   ___    ___  _  _ 
-  / __)( \\( )( \\/ )(_  _)( )( )(  )( \\( ) / __)  / __)( )( )
- ( __ ) )  (  \\  /   )(   )__(  )(  )  ( ( (_-.  \\__ \\ )__( 
-  \\___)(_)\\_) (__)  (__) (_)(_)(__)(_)\\_) \\___/  (__/(_)(_)
-`;
+┌─┐┌┐┌┬ ┬┌┬┐┬ ┬┬┌┐┌┌─┐ ┌─┐┬ ┬
+├─┤│││└┬┘ │ ├─┤│││││ ┬ └─┐├─┤
+┴ ┴┘└┘ ┴  ┴ ┴ ┴┴┘└┘└─┘o└─┘┴ ┴`;
+
+// Bash syntax highlighter
+const highlightBash = (line: string): React.ReactNode[] => {
+  // Handle comments first
+  const commentMatch = line.match(/^(.*?)(#.*)$/);
+  if (commentMatch) {
+    const [, before, comment] = commentMatch;
+    return [...highlightBash(before), <span key="comment" className="text-zinc-500 italic">{comment}</span>];
+  }
+
+  const tokens: React.ReactNode[] = [];
+  const keywords = /\b(if|then|else|elif|fi|for|while|do|done|case|esac|function|return|local|export|readonly|declare|trap|exit|break|continue|in|select|until)\b/g;
+  const builtins = /\b(echo|read|cd|pwd|ls|cat|cp|mv|rm|mkdir|chmod|chown|sed|awk|grep|date|wc|test|source|\.|eval)\b/g;
+  const operators = /(\[\[|\]\]|\(\(|\)\)|&&|\|\||[|;<>&])/g;
+  const strings = /(["'])(?:(?!\1)[^\\]|\\.)*?\1/g;
+  const variables = /(\$\{[^}]+\}|\$[a-zA-Z_][a-zA-Z0-9_]*|\$[0-9@#?!$*-])/g;
+  const numbers = /\b([0-9]+)\b/g;
+
+  // Combine all patterns
+  const combined = new RegExp(
+    `(${keywords.source})|(${builtins.source})|(${operators.source})|(${strings.source})|(${variables.source})|(${numbers.source})`,
+    'g'
+  );
+
+  let lastIndex = 0;
+  let match;
+  let key = 0;
+
+  while ((match = combined.exec(line)) !== null) {
+    // Add text before match
+    if (match.index > lastIndex) {
+      tokens.push(line.slice(lastIndex, match.index));
+    }
+
+    const text = match[0];
+    if (/^(if|then|else|elif|fi|for|while|do|done|case|esac|function|return|local|export|readonly|declare|trap|exit|break|continue|in|select|until)$/.test(text)) {
+      tokens.push(<span key={key++} className="text-purple-400 font-semibold">{text}</span>);
+    } else if (/^(echo|read|cd|pwd|ls|cat|cp|mv|rm|mkdir|chmod|chown|sed|awk|grep|date|wc|test|source|\.|eval)$/.test(text)) {
+      tokens.push(<span key={key++} className="text-blue-400">{text}</span>);
+    } else if (/^(\[\[|\]\]|\(\(|\)\)|&&|\|\||[|;<>&])$/.test(text)) {
+      tokens.push(<span key={key++} className="text-rose-400">{text}</span>);
+    } else if (/^["']/.test(text)) {
+      tokens.push(<span key={key++} className="text-emerald-400">{text}</span>);
+    } else if (/^\$/.test(text)) {
+      tokens.push(<span key={key++} className="text-amber-300">{text}</span>);
+    } else if (/^[0-9]+$/.test(text)) {
+      tokens.push(<span key={key++} className="text-cyan-400">{text}</span>);
+    } else {
+      tokens.push(text);
+    }
+
+    lastIndex = combined.lastIndex;
+  }
+
+  // Add remaining text
+  if (lastIndex < line.length) {
+    tokens.push(line.slice(lastIndex));
+  }
+
+  return tokens.length > 0 ? tokens : [line];
+};
 
 const ManPageSection = ({ title, children }) => (
   <div className="mb-8">
@@ -127,9 +299,14 @@ const ManPageSection = ({ title, children }) => (
 );
 
 export default function AnythingSH() {
-  const [activeTab, setActiveTab] = useState('full');
+  const [activeTab, setActiveTab] = useState<'full' | 'terse'>('full');
+  const [provider, setProvider] = useState<ProviderId>('claude');
   const [copied, setCopied] = useState(false);
   const [mounted, setMounted] = useState(false);
+
+  // Generate scripts based on selected provider
+  const SCRIPT_FULL = getScriptFull(provider);
+  const SCRIPT_TERSE = getScriptTerse(provider);
   
   // Typing effect for the "boot" sequence
   useEffect(() => {
@@ -197,15 +374,32 @@ export default function AnythingSH() {
             </ManPageSection>
             
             <div className="pt-12 text-zinc-600 text-xs">
-              <p>AUTHORS: An unholy alliance of User & Machine.</p>
-              <p>LICENSE: Do what you want (MIT).</p>
+              <p>AUTHOR: XertroV</p>
+              <p>LICENSE: Unlicense (Public Domain)</p>
             </div>
           </div>
         </div>
 
         {/* RIGHT COLUMN: The Source Code */}
         <div className="lg:col-span-7 flex flex-col h-full">
-          
+
+          {/* Provider Selector */}
+          <div className="mb-4 flex flex-wrap gap-2">
+            {(Object.keys(PROVIDERS) as ProviderId[]).map((id) => (
+              <button
+                key={id}
+                onClick={() => setProvider(id)}
+                className={`px-3 py-1.5 text-xs border transition-colors ${
+                  provider === id
+                    ? 'border-emerald-500 bg-emerald-900/30 text-emerald-400'
+                    : 'border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-300'
+                }`}
+              >
+                {PROVIDERS[id].name}
+              </button>
+            ))}
+          </div>
+
           <div className="border border-zinc-800 bg-[#0a0a0a] flex-grow flex flex-col shadow-2xl relative overflow-hidden group">
             {/* Window Header */}
             <div className="bg-zinc-900 border-b border-zinc-800 px-4 py-2 flex items-center justify-between select-none">
@@ -216,22 +410,31 @@ export default function AnythingSH() {
                   <div className="w-2.5 h-2.5 rounded-sm bg-zinc-700"></div>
                 </div>
                 <div className="text-xs text-zinc-400 flex gap-4">
-                  <button 
+                  <button
                     onClick={() => setActiveTab('full')}
                     className={`hover:text-white transition-colors ${activeTab === 'full' ? 'text-emerald-400 font-bold' : ''}`}
                   >
-                    anything.sh
+                    full
                   </button>
-                  <button 
+                  <button
                     onClick={() => setActiveTab('terse')}
                     className={`hover:text-white transition-colors ${activeTab === 'terse' ? 'text-emerald-400 font-bold' : ''}`}
                   >
-                    terse.sh
+                    compact
                   </button>
                 </div>
               </div>
-              <div className="text-[10px] text-zinc-600 uppercase tracking-widest">
-                {activeTab === 'full' ? '1.2KB' : '234B'}
+              <div className="flex items-center gap-3">
+                <span className="text-[10px] text-zinc-600 uppercase tracking-widest">
+                  {activeTab === 'full' ? '~2.5KB' : '~1KB'}
+                </span>
+                <button
+                  onClick={handleCopy}
+                  className="flex items-center gap-1.5 px-2 py-1 text-xs border border-zinc-700 hover:border-emerald-600 hover:text-emerald-400 text-zinc-400 transition-colors"
+                >
+                  <Copy className="w-3 h-3" />
+                  <span className="w-10">{copied ? 'copied!' : 'copy'}</span>
+                </button>
               </div>
             </div>
 
@@ -242,22 +445,7 @@ export default function AnythingSH() {
                   {(activeTab === 'full' ? SCRIPT_FULL : SCRIPT_TERSE).split('\n').map((line, i) => (
                     <div key={i} className="table-row">
                       <span className="table-cell text-zinc-700 text-right pr-4 select-none w-8">{i + 1}</span>
-                      <span className="table-cell">
-                        {/* Simple syntax highlighting */}
-                        {line.split(/(#.*$)/).map((part, idx) => {
-                          if (part.startsWith('#')) return <span key={idx} className="text-zinc-500 italic">{part}</span>;
-                          return part
-                            .replace(/function|local|if|fi|else|then|cat|echo|read|exit|return/g, m => `__KEYWORD__${m}__END__`)
-                            .replace(/"[^"]*"/g, m => `__STRING__${m}__END__`)
-                            .replace(/\$+[a-zA-Z0-9_{}]+/g, m => `__VAR__${m}__END__`)
-                            .split(/(__.*?__)/).map((token, tIdx) => {
-                              if (token.startsWith('__KEYWORD__')) return <span key={tIdx} className="text-purple-400">{token.slice(11, -7)}</span>;
-                              if (token.startsWith('__STRING__')) return <span key={tIdx} className="text-emerald-400">{token.slice(10, -7)}</span>;
-                              if (token.startsWith('__VAR__')) return <span key={tIdx} className="text-amber-300">{token.slice(7, -7)}</span>;
-                              return token;
-                            });
-                        })}
-                      </span>
+                      <span className="table-cell">{highlightBash(line)}</span>
                     </div>
                   ))}
                 </code>
@@ -309,19 +497,7 @@ export default function AnythingSH() {
 
       </div>
 
-      <style jsx global>{`
-        .custom-scrollbar::-webkit-scrollbar {
-          width: 10px;
-          background: #0a0a0a;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-          background: #333;
-          border: 2px solid #0a0a0a;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-          background: #444;
-        }
-      `}</style>
+{/* Custom scrollbar styles are in index.css */}
     </div>
   );
 }
