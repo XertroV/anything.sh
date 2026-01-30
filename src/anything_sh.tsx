@@ -133,6 +133,7 @@ trap _cleanup EXIT
 # ─────────────────────────────────────────────────────────────────
 _ask() {
     local intent="$1"
+    local feedback="\${2:-}"
     local full_prompt
     read -r -d '' full_prompt <<PROMPT
 ${LLM_PROMPT}
@@ -155,47 +156,90 @@ _spinner() {
 }
 
 # ─────────────────────────────────────────────────────────────────
-# EVOLVE: Append generated code to script
+# EVOLVE: Iterative code generation with feedback loop
 # ─────────────────────────────────────────────────────────────────
 _evolve() {
     local intent="$1"
-    ((STEP++))
-    echo -e "\\033[32m[step $STEP]\\033[0m $intent"
+    local feedback=""
+    local is_final="false"
+    local max_iterations=5
+    local iteration=0
 
-    # Start spinner in background
-    _spinner &
-    local spinner_pid=$!
+    # Remove trailing _prompt and # from script (so reruns replay without prompting)
+    sed -i '/^_prompt$/,/^#$/d' "$SELF"
 
-    local code=$(_ask "$intent")
+    while [[ "$is_final" != "true" && $iteration -lt $max_iterations ]]; do
+        ((iteration++))
+        ((STEP++))
 
-    # Stop spinner
-    kill $spinner_pid 2>/dev/null
-    wait $spinner_pid 2>/dev/null
-    printf "\\r\\033[K"
-    # Extract code from markdown fences if present, otherwise use as-is
-    if echo "$code" | grep -q '^\`\`\`'; then
-        code=$(echo "$code" | sed -n '/^\`\`\`/,/^\`\`\`/p' | sed '/^\`\`\`/d')
-    fi
-    if [[ -z "$code" ]]; then
-        echo -e "\\033[31m[error]\\033[0m empty response"
-        return 1
-    fi
+        # Start spinner
+        _spinner &
+        local spinner_pid=$!
 
-    local lines=$(echo "$code" | wc -l)
-    echo -e "\\033[33m[+$lines lines]\\033[0m"
+        local response=$(_ask "$intent" "$feedback")
 
-    # Append: comment header, generated code, then _prompt for next iteration
-    cat >> "$SELF" <<EVOLUTION
+        # Stop spinner
+        kill $spinner_pid 2>/dev/null
+        wait $spinner_pid 2>/dev/null
+        printf "\\r\\033[K"
+
+        # Parse structured response
+        is_final=$(echo "$response" | grep -i '^FINAL:' | head -1 | sed 's/^FINAL:[[:space:]]*//' | tr '[:upper:]' '[:lower:]')
+        local description=$(echo "$response" | grep -i '^DESCRIPTION:' | head -1 | sed 's/^DESCRIPTION:[[:space:]]*//')
+        local code=$(echo "$response" | sed -n '/^BASH_CODE:/,$ { /^BASH_CODE:/d; p }')
+
+        # Fallback: if no structured format, treat whole response as code
+        if [[ -z "$code" ]]; then
+            code="$response"
+            description="$intent"
+            is_final="true"
+        fi
+
+        # Strip markdown fences if present
+        if echo "$code" | grep -q '^\`\`\`'; then
+            code=$(echo "$code" | sed -n '/^\`\`\`/,/^\`\`\`/p' | sed '/^\`\`\`/d')
+        fi
+
+        if [[ -z "$code" ]]; then
+            echo -e "\\033[31m[error]\\033[0m empty response"
+            return 1
+        fi
+
+        echo -e "\\033[32m[step $STEP]\\033[0m $description"
+        local lines=$(echo "$code" | wc -l)
+        echo -e "\\033[33m[+$lines lines]\\033[0m"
+
+        # Append code to script
+        cat >> "$SELF" <<EVOLUTION
 
 # ═══════════════════════════════════════════════════════════════
-# STEP $STEP: $intent
+# STEP $STEP: $description
 # Generated: $(date '+%Y-%m-%d %H:%M:%S')
 # ═══════════════════════════════════════════════════════════════
 $code
+EVOLUTION
+
+        if [[ "$is_final" != "true" ]]; then
+            # Execute and capture output for feedback
+            echo -e "\\033[36m[running...]\\033[0m"
+            local output exit_code
+            output=$( { eval "$code"; } 2>&1 )
+            exit_code=$?
+            echo "$output"
+            feedback="
+PREVIOUS STEP OUTPUT (exit code $exit_code):
+$output
+"
+            [[ $exit_code -ne 0 ]] && echo -e "\\033[31m[exit $exit_code]\\033[0m"
+        fi
+    done
+
+    # Append _prompt for next user input
+    cat >> "$SELF" <<'PROMPT_MARKER'
 
 _prompt
 #
-EVOLUTION
+PROMPT_MARKER
 }
 
 # ─────────────────────────────────────────────────────────────────
@@ -245,7 +289,7 @@ _cleanup() { cp "$SELF" "\${SELF%.sh}_$(date +%s).log.sh"; cp "$ORIG" "$SELF"; e
 trap _cleanup EXIT
 
 _ask() {
-    local intent="$1"; local full_prompt
+    local intent="$1"; local feedback="\${2:-}"; local full_prompt
     read -r -d '' full_prompt <<PROMPT
 ${LLM_PROMPT}
 PROMPT
@@ -254,12 +298,26 @@ PROMPT
 
 _spin() { while :; do for c in · ·· ··· ···· ····· ' ····' '  ···' '   ··' '    ·' '     '; do printf "\\r\\033[36m%s\\033[0m" "$c"; sleep .1; done; done; }
 _evolve() {
-    ((STEP++)); echo -e "\\033[32m[step $STEP]\\033[0m $1"
-    _spin & local p=$!; local code=$(_ask "$1"); kill $p 2>/dev/null; printf "\\r\\033[K"
-    [[ -z "$code" ]] && echo "error" && return 1
-    # Extract from markdown fences if present
-    echo "$code" | grep -q '^\`\`\`' && code=$(echo "$code" | sed -n '/^\`\`\`/,/^\`\`\`/p' | sed '/^\`\`\`/d')
-    echo -e "\\n# STEP $STEP: $1\\n$code\\n_prompt\\n#" >> "$SELF"
+    local intent="$1" feedback="" is_final="false" iter=0
+    sed -i '/^_prompt$/,/^#$/d' "$SELF"
+    while [[ "$is_final" != "true" && $iter -lt 5 ]]; do
+        ((iter++)); ((STEP++))
+        _spin & local p=$!; local resp=$(_ask "$intent" "$feedback"); kill $p 2>/dev/null; printf "\\r\\033[K"
+        is_final=$(echo "$resp" | grep -i '^FINAL:' | head -1 | sed 's/^FINAL:[[:space:]]*//' | tr '[:upper:]' '[:lower:]')
+        local desc=$(echo "$resp" | grep -i '^DESCRIPTION:' | head -1 | sed 's/^DESCRIPTION:[[:space:]]*//')
+        local code=$(echo "$resp" | sed -n '/^BASH_CODE:/,$ { /^BASH_CODE:/d; p }')
+        [[ -z "$code" ]] && code="$resp" && desc="$intent" && is_final="true"
+        echo "$code" | grep -q '^\`\`\`' && code=$(echo "$code" | sed -n '/^\`\`\`/,/^\`\`\`/p' | sed '/^\`\`\`/d')
+        echo -e "\\033[32m[step $STEP]\\033[0m $desc"
+        echo -e "\\n# STEP $STEP: $desc\\n$code" >> "$SELF"
+        if [[ "$is_final" != "true" ]]; then
+            echo -e "\\033[36m[running...]\\033[0m"
+            local out; out=$( { eval "$code"; } 2>&1 ); local rc=$?
+            echo "$out"; feedback="\\nPREVIOUS OUTPUT (exit $rc):\\n$out\\n"
+            [[ $rc -ne 0 ]] && echo -e "\\033[31m[exit $rc]\\033[0m"
+        fi
+    done
+    echo -e "\\n_prompt\\n#" >> "$SELF"
 }
 
 _prompt() {
