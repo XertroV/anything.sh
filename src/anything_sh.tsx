@@ -140,6 +140,7 @@ const ProviderSelector = ({
 
 const EXAMPLE_PROMPTS = [
   "make todd proud and release skyrim for bash, immersive TUI, atomospheric, action RPG",
+  "install utilities to support rich TUI experiences (gum lolcat fzf figlet pv nms glow etc)",
   "scan my network with nmap, find unknown devices",
   "build an interactive Python game that uses the same autopoietic self-modifying pattern",
   "teach me shell scripting basics with hands-on interactive examples",

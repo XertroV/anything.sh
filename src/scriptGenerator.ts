@@ -153,6 +153,7 @@ MAX_ITER=160  # Max LLM calls per task (increase for complex tasks)
 BONUS_ITER=0  # Extra iterations granted via _continue_journey()
 SPINNER_PID=""  # Track spinner for cleanup
 AGENT_MODE=0  # Set to 1 with -a/--agent flag for non-interactive execution
+AGENT_REALTIME_FD=2  # Agent real-time output: 2=stderr, or use /dev/tty
 
 # ─────────────────────────────────────────────────────────────────
 # TRACK ORIGINAL: For agent mode self-calling, track the original script
@@ -337,12 +338,22 @@ EVOLUTION
         echo -e "\\033[36m[running...]\\033[0m"
         local tmpfile=\$(mktemp) codefile=\$(mktemp)
         printf '%s' "\$code" > "\$codefile"
-        if [[ "\$(uname)" == "Darwin" ]]; then
-            script -q "\$tmpfile" bash "\$codefile"
+        if [[ \$AGENT_MODE -eq 1 ]]; then
+            # Agent mode: real-time output to stderr with > prefix to show it's a subagent
+            if [[ "\$(uname)" == "Darwin" ]]; then
+                script -q "\$tmpfile" bash "\$codefile" | sed 's/^/> /' >&\$AGENT_REALTIME_FD
+            else
+                script -q -e -c "bash '\$codefile'" "\$tmpfile" | sed 's/^/> /' >&\$AGENT_REALTIME_FD
+            fi
+            exit_code=\${PIPESTATUS[0]}
         else
-            script -q -e -c "bash '\$codefile'" "\$tmpfile"
+            if [[ "\$(uname)" == "Darwin" ]]; then
+                script -q "\$tmpfile" bash "\$codefile"
+            else
+                script -q -e -c "bash '\$codefile'" "\$tmpfile"
+            fi
+            exit_code=\$?
         fi
-        exit_code=\$?
         rm -f "\$codefile"
         # Clean ANSI codes for LLM feedback (script captures control sequences)
         output=\$(perl -pe 's/\\e\\[[0-9;]*[mGKHJF]//g; s/\\r\\n/\\n/g; s/\\r//g' "\$tmpfile" 2>/dev/null || cat "\$tmpfile")
@@ -350,7 +361,8 @@ EVOLUTION
         [[ \$exit_code -ne 0 ]] && echo -e "\\033[31m[exit \$exit_code]\\033[0m"
 
         # Immediately append output as comments to script (before LLM call, in case of crash)
-        if [[ -n "\$output" ]]; then
+        # Skip in agent mode - output already forwarded to parent
+        if [[ \$AGENT_MODE -eq 0 && -n "\$output" ]]; then
             local output_lines=\$(echo "\$output" | wc -l)
             if [[ \$output_lines -gt 1000 ]]; then
                 # Truncate: keep first 400 and last 400 lines
@@ -413,11 +425,12 @@ Please diagnose the issue and fix it. You may need to install additional depende
     # In agent mode, return the final output and exit
     if [[ \$AGENT_MODE -eq 1 ]]; then
         if [[ \$exit_code -ne 0 ]]; then
-            # On error, output to stderr
-            echo "\$output" >&2
+            # On error, output to stderr with > prefix
+            echo "\$output" | sed 's/^/> /' >&2
             exit \$exit_code
         else
-            echo "\$output"
+            # Success output to stdout with @ prefix
+            echo "\$output" | sed 's/^/@ /'
             exit 0
         fi
     fi
@@ -438,9 +451,16 @@ PROMPT_MARKER
 # ─────────────────────────────────────────────────────────────────
 _prompt() {
     echo ""
-    read -rp $'\\033[95m  what shall I become? \\033[0m' input || exit 0
-    [[ -z "$input" || "$input" == "exit" ]] && exit 0
-    _evolve "$input"
+    local input
+    if command -v gum &>/dev/null; then
+        # gum supports multiline editing, backspace over newlines, etc.
+        input=\$(gum input --placeholder "what shall I become?" --width 60) || exit 0
+        echo -e "\\033[95m  → \\033[0m\$input"
+    else
+        read -rp \$'\\033[95m  what shall I become? \\033[0m' input || exit 0
+    fi
+    [[ -z "\$input" || "\$input" == "exit" ]] && exit 0
+    _evolve "\$input"
 }
 
 # ─────────────────────────────────────────────────────────────────
@@ -484,7 +504,7 @@ fi
 export const getScriptCompact = (provider: ProviderId) => `#!/bin/bash
 # anything.sh [compact] · ${PROVIDERS[provider].name}
 set -uo pipefail
-SELF="$0"; ORIG="\${SELF}.orig"; STEP=0; MAX_ITER=160; BONUS_ITER=0; SPINNER_PID=""; AGENT_MODE=0
+SELF="$0"; ORIG="\${SELF}.orig"; STEP=0; MAX_ITER=160; BONUS_ITER=0; SPINNER_PID=""; AGENT_MODE=0; AGENT_REALTIME_FD=2
 [[ -z "\${ANYTHING_ORIGINAL:-}" ]] && export ANYTHING_ORIGINAL="$SELF"
 
 # Auto-localize: copy to current dir if running from system path
@@ -533,12 +553,17 @@ _evolve() {
         echo -e "\\033[36m[running...]\\033[0m"
         local tmpf=\$(mktemp) codef=\$(mktemp)
         printf '%s' "\$code" > "\$codef"
-        if [[ "\$(uname)" == "Darwin" ]]; then script -q "\$tmpf" bash "\$codef"; else script -q -e -c "bash '\$codef'" "\$tmpf"; fi
-        rm -f "\$codef"
-        rc=\$?; out=\$(perl -pe 's/\\e\\[[0-9;]*[mGKHJF]//g; s/\\r//g' "\$tmpf" 2>/dev/null || cat "\$tmpf"); rm -f "\$tmpf"
+        if [[ \$AGENT_MODE -eq 1 ]]; then
+            if [[ "\$(uname)" == "Darwin" ]]; then script -q "\$tmpf" bash "\$codef" | sed 's/^/> /' >&\$AGENT_REALTIME_FD; else script -q -e -c "bash '\$codef'" "\$tmpf" | sed 's/^/> /' >&\$AGENT_REALTIME_FD; fi
+            rc=\${PIPESTATUS[0]}
+        else
+            if [[ "\$(uname)" == "Darwin" ]]; then script -q "\$tmpf" bash "\$codef"; else script -q -e -c "bash '\$codef'" "\$tmpf"; fi
+            rc=\$?
+        fi
+        rm -f "\$codef"; out=\$(perl -pe 's/\\e\\[[0-9;]*[mGKHJF]//g; s/\\r//g' "\$tmpf" 2>/dev/null || cat "\$tmpf"); rm -f "\$tmpf"
         [[ \$rc -ne 0 ]] && echo -e "\\033[31m[exit \$rc]\\033[0m"
-        # Append output immediately as comments (before next LLM call, in case of crash)
-        [[ -n "\$out" ]] && { local ln=\$(echo "\$out"|wc -l); if [[ \$ln -gt 1000 ]]; then { echo ""; echo "# PREV OUTPUT:"; echo "\$out"|head -400|uniq|sed 's/^/# /'; echo "# [...\$((ln-800)) snipped...]"; echo "\$out"|tail -400|uniq|sed 's/^/# /'; } >>"\$SELF"; else { echo ""; echo "# PREV OUTPUT:"; echo "\$out"|uniq|sed 's/^/# /'; } >>"\$SELF"; fi; }
+        # Append output immediately as comments (before next LLM call, in case of crash) - skip in agent mode
+        [[ \$AGENT_MODE -eq 0 && -n "\$out" ]] && { local ln=\$(echo "\$out"|wc -l); if [[ \$ln -gt 1000 ]]; then { echo ""; echo "# PREV OUTPUT:"; echo "\$out"|head -400|uniq|sed 's/^/# /'; echo "# [...\$((ln-800)) snipped...]"; echo "\$out"|tail -400|uniq|sed 's/^/# /'; } >>"\$SELF"; else { echo ""; echo "# PREV OUTPUT:"; echo "\$out"|uniq|sed 's/^/# /'; } >>"\$SELF"; fi; }
         if [[ "\$is_final" != "true" ]]; then
             feedback="\\nPREVIOUS OUTPUT (exit \$rc):\\n\$out\\n"
         elif [[ \$rc -ne 0 && \$rc -ne 141 && \$iter -lt \$MAX_ITER ]]; then
@@ -554,14 +579,14 @@ _evolve() {
         echo -e "\\033[36m[stopped]\\033[0m"
     fi
     if [[ \$AGENT_MODE -eq 1 ]]; then
-        if [[ \$rc -ne 0 ]]; then echo "\$out" >&2; exit \$rc; else echo "\$out"; exit 0; fi
+        if [[ \$rc -ne 0 ]]; then echo "\$out" | sed 's/^/> /' >&2; exit \$rc; else echo "\$out" | sed 's/^/@ /'; exit 0; fi
     fi
     echo -e "\\n_prompt\\n#" >> "\$SELF"
     _prompt
 }
 
 _prompt() {
-    read -rp \$'\\033[95m  become? \\033[0m' i || exit
+    local i; if command -v gum &>/dev/null; then i=\$(gum input --placeholder "become?" --width 60) || exit; echo -e "\\033[95m  → \\033[0m\$i"; else read -rp \$'\\033[95m  become? \\033[0m' i || exit; fi
     [[ -z "\$i" ]] && exit; _evolve "\$i"
 }
 
