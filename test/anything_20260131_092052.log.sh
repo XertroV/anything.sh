@@ -810,3 +810,278 @@ GAME
     /tmp/dnd_adventure.sh
 }
 step2
+
+# ═══════════════════════════════════════════════════════════════
+# STEP 3: Create and run D&D text adventure with fixed quoting
+# Generated: 2026-01-31 09:20:50 | FINAL: true
+# ═══════════════════════════════════════════════════════════════
+step3() {
+    cat << 'GAME' > /tmp/dnd_adventure.sh
+#!/bin/bash
+
+# D&D Style Text Adventure - Fantasy Quest
+# Character Stats
+declare -A STATS
+STATS[STR]=10
+STATS[DEX]=10
+STATS[CON]=10
+STATS[INT]=10
+STATS[WIS]=10
+STATS[CHA]=10
+HP=20
+MAX_HP=20
+GOLD=10
+XP=0
+LEVEL=1
+INVENTORY=("Rusty Sword" "Torch")
+
+clear
+echo "╔════════════════════════════════════════════════════════════╗"
+echo "║     ⚔️  THE CAVERNS OF SHADOW  ⚔️                          ║"
+echo "║         A D&D Style Text Adventure                        ║"
+echo "╚════════════════════════════════════════════════════════════╝"
+echo ""
+
+roll_stat() {
+    echo $(( (RANDOM % 6 + 1) + (RANDOM % 6 + 1) + (RANDOM % 6 + 1) ))
+}
+
+show_stats() {
+    echo "┌─────────────────────────────────┐"
+    echo "│ CHARACTER SHEET                 │"
+    echo "├─────────────────────────────────┤"
+    printf "│ HP: %d/%d  GOLD: %d  XP: %d     \n" $HP $MAX_HP $GOLD $XP
+    printf "│ LEVEL: %d                       \n" $LEVEL
+    echo "├─────────────────────────────────┤"
+    printf "│ STR: %-2d  DEX: %-2d  CON: %-2d     │\n" ${STATS[STR]} ${STATS[DEX]} ${STATS[CON]}
+    printf "│ INT: %-2d  WIS: %-2d  CHA: %-2d     │\n" ${STATS[INT]} ${STATS[WIS]} ${STATS[CHA]}
+    echo "├─────────────────────────────────┤"
+    echo "│ INVENTORY:                      │"
+    for item in "${INVENTORY[@]}"; do
+        printf "│  • %-28s│\n" "$item"
+    done
+    echo "└─────────────────────────────────┘"
+}
+
+roll_d20() {
+    echo $(( RANDOM % 20 + 1 ))
+}
+
+echo "Rolling your stats (3d6 each)..."
+sleep 1
+STATS[STR]=$(roll_stat)
+STATS[DEX]=$(roll_stat)
+STATS[CON]=$(roll_stat)
+STATS[INT]=$(roll_stat)
+STATS[WIS]=$(roll_stat)
+STATS[CHA]=$(roll_stat)
+MAX_HP=$((10 + (STATS[CON] - 10) / 2))
+HP=$MAX_HP
+
+echo ""
+show_stats
+echo ""
+
+echo "You stand at the entrance to the CAVERNS OF SHADOW."
+echo "Legends speak of treasure... and terrible monsters within."
+echo ""
+
+LOCATION="entrance"
+GAME_OVER=false
+
+while [ "$GAME_OVER" = false ]; do
+    case $LOCATION in
+        "entrance")
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "CAVERN ENTRANCE"
+            echo "Cold air flows from the dark opening before you."
+            echo "Bones are scattered near the entrance."
+            echo ""
+            echo "What do you do?"
+            echo "  [1] Enter the cavern"
+            echo "  [2] Search the bones"
+            echo "  [3] Check stats"
+            echo "  [4] Quit"
+            read -p "> " choice
+            case $choice in
+                1) LOCATION="main_hall";;
+                2) 
+                    roll=$(roll_d20)
+                    mod=$(( (STATS[INT] - 10) / 2 ))
+                    echo "🎲 Investigation check: $roll + $mod"
+                    if [ $roll -ge 10 ]; then
+                        echo "You find 5 gold coins among the bones!"
+                        GOLD=$((GOLD + 5))
+                    else
+                        echo "You find nothing but dust and regret."
+                    fi
+                    ;;
+                3) show_stats;;
+                4) GAME_OVER=true;;
+            esac
+            ;;
+        "main_hall")
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "MAIN HALL"
+            echo "A vast cavern opens before you. Stalactites hang"
+            echo "like stone fangs. Three passages lead deeper."
+            echo "You hear growling from the LEFT passage..."
+            echo ""
+            echo "What do you do?"
+            echo "  [1] Take the LEFT passage (growling)"
+            echo "  [2] Take the CENTER passage (faint light)"
+            echo "  [3] Take the RIGHT passage (quiet)"
+            echo "  [4] Return to entrance"
+            echo "  [5] Check stats"
+            read -p "> " choice
+            case $choice in
+                1) LOCATION="goblin_lair";;
+                2) LOCATION="treasure_room";;
+                3) LOCATION="trap_corridor";;
+                4) LOCATION="entrance";;
+                5) show_stats;;
+            esac
+            ;;
+        "goblin_lair")
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "⚔️  COMBAT! A GOBLIN attacks!"
+            echo ""
+            GOBLIN_HP=7
+            while [ $GOBLIN_HP -gt 0 ] && [ $HP -gt 0 ]; do
+                echo "Goblin HP: $GOBLIN_HP | Your HP: $HP"
+                echo "  [1] Attack  [2] Flee"
+                read -p "> " choice
+                if [ "$choice" = "1" ]; then
+                    roll=$(roll_d20)
+                    mod=$(( (STATS[STR] - 10) / 2 ))
+                    attack=$((roll + mod))
+                    echo "🎲 Attack roll: $roll + $mod = $attack"
+                    if [ $attack -ge 12 ]; then
+                        dmg=$((RANDOM % 6 + 1))
+                        echo "✓ HIT! You deal $dmg damage!"
+                        GOBLIN_HP=$((GOBLIN_HP - dmg))
+                    else
+                        echo "✗ Miss!"
+                    fi
+                    if [ $GOBLIN_HP -gt 0 ]; then
+                        groll=$(roll_d20)
+                        if [ $groll -ge 10 ]; then
+                            gdmg=$((RANDOM % 4 + 1))
+                            echo "The goblin strikes you for $gdmg damage!"
+                            HP=$((HP - gdmg))
+                        else
+                            echo "The goblin misses!"
+                        fi
+                    fi
+                else
+                    echo "You flee back to the main hall!"
+                    LOCATION="main_hall"
+                    break
+                fi
+            done
+            if [ $HP -le 0 ]; then
+                echo ""
+                echo "☠️  YOU HAVE DIED  ☠️"
+                GAME_OVER=true
+            elif [ $GOBLIN_HP -le 0 ]; then
+                echo ""
+                echo "🏆 VICTORY! The goblin falls!"
+                echo "You gain 25 XP and find 8 gold!"
+                XP=$((XP + 25))
+                GOLD=$((GOLD + 8))
+                LOCATION="main_hall"
+            fi
+            ;;
+        "treasure_room")
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "TREASURE ROOM"
+            echo "Golden light fills this chamber! A chest sits"
+            echo "on a pedestal. But wait... is that a trap?"
+            echo ""
+            echo "  [1] Open the chest carefully"
+            echo "  [2] Smash it open"
+            echo "  [3] Leave"
+            read -p "> " choice
+            case $choice in
+                1)
+                    roll=$(roll_d20)
+                    mod=$(( (STATS[DEX] - 10) / 2 ))
+                    check=$((roll + mod))
+                    echo "🎲 Dexterity check: $roll + $mod = $check"
+                    if [ $check -ge 12 ]; then
+                        echo "You carefully disarm the trap and open the chest!"
+                        echo "Inside: 50 GOLD and a MAGIC SWORD!"
+                        GOLD=$((GOLD + 50))
+                        INVENTORY+=("Magic Sword (+2)")
+                        XP=$((XP + 50))
+                        echo ""
+                        echo "🎉 QUEST COMPLETE! You have found the treasure!"
+                        echo "Final Stats:"
+                        show_stats
+                        GAME_OVER=true
+                    else
+                        echo "CLICK! A poison dart hits you for 5 damage!"
+                        HP=$((HP - 5))
+                        if [ $HP -le 0 ]; then
+                            echo "☠️  YOU HAVE DIED  ☠️"
+                            GAME_OVER=true
+                        else
+                            echo "You grab 20 gold and flee!"
+                            GOLD=$((GOLD + 20))
+                            LOCATION="main_hall"
+                        fi
+                    fi
+                    ;;
+                2)
+                    echo "CRASH! The trap triggers! 8 damage!"
+                    HP=$((HP - 8))
+                    if [ $HP -le 0 ]; then
+                        echo "☠️  YOU HAVE DIED  ☠️"
+                        GAME_OVER=true
+                    else
+                        echo "You grab what you can: 30 gold!"
+                        GOLD=$((GOLD + 30))
+                        LOCATION="main_hall"
+                    fi
+                    ;;
+                3) LOCATION="main_hall";;
+            esac
+            ;;
+        "trap_corridor")
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "TRAP CORRIDOR"
+            echo "The floor is covered with suspicious tiles..."
+            roll=$(roll_d20)
+            mod=$(( (STATS[WIS] - 10) / 2 ))
+            check=$((roll + mod))
+            echo "🎲 Wisdom (Perception) check: $roll + $mod = $check"
+            if [ $check -ge 14 ]; then
+                echo "You spot the safe path and find a HEALING POTION!"
+                INVENTORY+=("Healing Potion")
+            else
+                echo "You trigger a trap! 4 damage!"
+                HP=$((HP - 4))
+                if [ $HP -le 0 ]; then
+                    echo "☠️  YOU HAVE DIED  ☠️"
+                    GAME_OVER=true
+                fi
+            fi
+            if [ "$GAME_OVER" = false ]; then
+                LOCATION="main_hall"
+            fi
+            ;;
+    esac
+    echo ""
+done
+
+echo ""
+echo "Thanks for playing THE CAVERNS OF SHADOW!"
+echo "Final Score: $GOLD gold, $XP experience"
+GAME
+    chmod +x /tmp/dnd_adventure.sh
+    echo "=== D&D Text Adventure Created ==="
+    echo "Starting game..."
+    echo ""
+    /tmp/dnd_adventure.sh
+}
+step3

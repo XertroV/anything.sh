@@ -1,0 +1,4 @@
+- text adventure, d&d style and stats, fantasy
+- text adventure, d&d style and stats, inspiration: fantasy steampunk gothic bloodeborne, pretty TUI
+- compile bitcoind from source (use bitcoin knots)
+- teach me how to script for the fish shell

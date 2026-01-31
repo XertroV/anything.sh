@@ -8,6 +8,7 @@ const LLM_PROMPT = `You are a bash code generator in an iterative execution loop
 SYSTEM: \$(uname -sm) \$(. /etc/os-release 2>/dev/null && echo "\$PRETTY_NAME" || sw_vers -productName 2>/dev/null) | \$SHELL
 CWD: \$PWD
 DISPLAY: \$([[ -n "\${WAYLAND_DISPLAY:-}" ]] && echo "wayland:\$WAYLAND_DISPLAY" || [[ -n "\${DISPLAY:-}" ]] && echo "x11:\$DISPLAY" || echo "NONE")\$([[ -n "\${SSH_TTY:-}" ]] && echo " [ssh]")
+INSTALLED TUI: \$(for t in whiptail dialog gum fzf figlet toilet cowsay lolcat boxes pv nms chafa glow bat cmatrix slides fastfetch asciinema delta; do command -v \$t &>/dev/null && printf "%s " "\$t"; done)
 
 TASK: \$intent
 TURNS REMAINING: \$remaining (if 1-2, prioritize completing the task or informing user why it can't be done)
@@ -24,8 +25,26 @@ RULES:
 - When FINAL: false, your code runs and stdout/stderr is sent back to you
 - When FINAL: true, task is complete and user is prompted for next task
 - No markdown fences, no explanation outside the format above
-- Each code block should define and call step\${STEP}()
+- Never include XML, HTML, or markup tags in bash code
+- Declare reusable helper functions globally at the top of your code block - they persist across all steps
+- Then define step\${STEP}() which uses those helpers, then call step\${STEP} at the end
 - IMPORTANT: Use absolute paths or verify paths exist before running commands. CWD may not be where you expect.
+- MULTI-PART EXPERIENCES: For games, stories, or tutorials, use FINAL: false after each chapter/segment
+- Your stdout/stderr feeds back to you, so output "Chapter 1 complete. Hero HP: 50" to inform your next step
+- Global variables persist across steps - declare without 'local' for state (HP=100, CHAPTER=1, INVENTORY=())
+- USER INPUT: Don't assume on vague tasks - ask. Prefer inline tools (gum, fzf, read -rp) that preserve context
+- Full-screen TUI (whiptail/dialog) sparingly - include all context needed to decide in the dialog itself, recap after
+- Set FINAL: false after asking - response appears in next feedback
+- For interactive experiences: use the best available tools (TUI, colors, ASCII art) to make something impressive
+- Only use TUI tools shown in INSTALLED TUI: line. To use unlisted tools, install them first (set FINAL: false, ask permission, install, then use)
+- QUALITY: Don't settle for minimal - create something impressive. The user will appreciate extra polish and creativity.
+- Use timing for effect: slow text reveals (pv, character-by-character), pauses for dramatic moments, animations where appropriate
+- When asking for input, ensure the user can see what they need to decide - pause after animations, recap after long output
+- Avoid clearing the screen, but if you need to during interactive experiences, confirm with the user first
+- Generate substantial, content-rich steps: full scenes with setup, action, dialogue AND choices - not minimal fragments. LLM calls are slow.
+- Build complete interactive systems in single steps: combat loops, dialogue trees, puzzles should run to completion - don't fragment across iterations without good reason
+- For complex experiences: use first 1-2 steps to create utility functions (UI helpers, combat engine, state display) so later steps are richer and more efficient. Leave design notes in comments.
+- For long experiences: call _continue_journey() at chapter/quest completion to add 16 more iterations
 
 EXAMPLE (checking before installing):
 FINAL: false
@@ -45,7 +64,7 @@ step\${STEP}`;
 const PROVIDERS = {
   claude: {
     name: 'Claude',
-    cmd: 'claude -p "$full_prompt" --dangerously-skip-permissions 2>/dev/null',
+    cmd: 'claude -p "$full_prompt" --model sonnet --dangerously-skip-permissions 2>/dev/null',
   },
   codex: {
     name: 'Codex',
@@ -111,6 +130,8 @@ SELF="$0"
 ORIG="\${SELF}.orig"
 STEP=0
 MAX_ITER=16  # Max LLM calls per task (increase for complex tasks)
+BONUS_ITER=0  # Extra iterations granted via _continue_journey()
+SPINNER_PID=""  # Track spinner for cleanup
 
 # ─────────────────────────────────────────────────────────────────
 # BACKUP: Save original on first run
@@ -122,6 +143,8 @@ MAX_ITER=16  # Max LLM calls per task (increase for complex tasks)
 # ─────────────────────────────────────────────────────────────────
 _cleanup() {
     local rc=$?
+    [[ -n "\$SPINNER_PID" ]] && kill "\$SPINNER_PID" 2>/dev/null
+    printf "\\r\\033[K"  # Clear spinner line
     [[ -f "$ORIG" ]] || return $rc
     local archive="\${SELF%.sh}_$(date +%Y%m%d_%H%M%S).log.sh"
     cp "$SELF" "$archive" 2>/dev/null || true
@@ -162,6 +185,14 @@ _spinner() {
 }
 
 # ─────────────────────────────────────────────────────────────────
+# CONTINUE JOURNEY: Add more iterations for long experiences
+# ─────────────────────────────────────────────────────────────────
+_continue_journey() {
+    BONUS_ITER=\$((BONUS_ITER + 16))
+    echo -e "\\033[36m[+16 iterations granted]\\033[0m"
+}
+
+# ─────────────────────────────────────────────────────────────────
 # EVOLVE: Iterative code generation with feedback loop
 # ─────────────────────────────────────────────────────────────────
 _evolve() {
@@ -173,20 +204,21 @@ _evolve() {
     # Remove trailing _prompt and # from script (so reruns replay without prompting)
     sed -i '/^_prompt$/,/^#$/d' "$SELF"
 
-    while [[ "$is_final" != "true" && $iteration -lt $MAX_ITER ]]; do
+    while [[ "$is_final" != "true" && $iteration -lt $((MAX_ITER + BONUS_ITER)) ]]; do
         ((iteration++))
         ((STEP++))
-        local remaining=$((MAX_ITER - iteration))
+        local remaining=$((MAX_ITER + BONUS_ITER - iteration))
 
         # Start spinner
         _spinner &
-        local spinner_pid=$!
+        SPINNER_PID=$!
 
         local response=$(_ask "$intent" "$feedback" "$remaining")
 
         # Stop spinner
-        kill $spinner_pid 2>/dev/null
-        wait $spinner_pid 2>/dev/null
+        kill \$SPINNER_PID 2>/dev/null
+        wait \$SPINNER_PID 2>/dev/null
+        SPINNER_PID=""
         printf "\\r\\033[K"
 
         # Parse structured response
@@ -215,7 +247,7 @@ _evolve() {
         local lines=$(echo "$code" | wc -l)
         echo -e "\\033[33m[+$lines lines]\\033[0m"
 
-        # Append code to script
+        # Append just the step header + code (output comments already appended after execution)
         cat >> "$SELF" <<EVOLUTION
 
 # ═══════════════════════════════════════════════════════════════
@@ -228,17 +260,46 @@ EVOLUTION
         # Execute with PTY (supports interactive programs like whiptail/dialog)
         echo -e "\\033[36m[running...]\\033[0m"
         local output exit_code
-        local tmpfile=\$(mktemp)
+        local tmpfile=\$(mktemp) codefile=\$(mktemp)
+        printf '%s' "\$code" > "\$codefile"
         if [[ "\$(uname)" == "Darwin" ]]; then
-            script -q "\$tmpfile" bash -c "eval \\"\$code\\""
+            script -q "\$tmpfile" bash "\$codefile"
         else
-            script -q -e -c "bash -c 'eval \\"\$code\\"'" "\$tmpfile"
+            script -q -e -c "bash '\$codefile'" "\$tmpfile"
         fi
         exit_code=\$?
+        rm -f "\$codefile"
         # Clean ANSI codes for LLM feedback (script captures control sequences)
         output=\$(perl -pe 's/\\e\\[[0-9;]*[mGKHJF]//g; s/\\r\\n/\\n/g; s/\\r//g' "\$tmpfile" 2>/dev/null || cat "\$tmpfile")
         rm -f "\$tmpfile"
         [[ \$exit_code -ne 0 ]] && echo -e "\\033[31m[exit \$exit_code]\\033[0m"
+
+        # Immediately append output as comments to script (before LLM call, in case of crash)
+        if [[ -n "\$output" ]]; then
+            local output_lines=\$(echo "\$output" | wc -l)
+            if [[ \$output_lines -gt 1000 ]]; then
+                # Truncate: keep first 400 and last 400 lines
+                {
+                    echo ""
+                    echo "# ───────────────────────────────────────────────────────────────"
+                    echo "# OUTPUT FROM PREVIOUS STEP:"
+                    echo "# ───────────────────────────────────────────────────────────────"
+                    echo "\$output" | head -400 | uniq | sed 's/^/# /'
+                    echo "#"
+                    echo "# [...\$((output_lines - 800)) lines snipped...]"
+                    echo "#"
+                    echo "\$output" | tail -400 | uniq | sed 's/^/# /'
+                } >> "\$SELF"
+            else
+                {
+                    echo ""
+                    echo "# ───────────────────────────────────────────────────────────────"
+                    echo "# OUTPUT FROM PREVIOUS STEP:"
+                    echo "# ───────────────────────────────────────────────────────────────"
+                    echo "\$output" | uniq | sed 's/^/# /'
+                } >> "\$SELF"
+            fi
+        fi
 
         if [[ "$is_final" != "true" ]]; then
             feedback="
@@ -321,11 +382,12 @@ echo ""
 const getScriptTerse = (provider: ProviderId) => `#!/bin/bash
 # anything.sh [compact] · ${PROVIDERS[provider].name}
 set -uo pipefail
-SELF="$0"; ORIG="\${SELF}.orig"; STEP=0; MAX_ITER=16
+SELF="$0"; ORIG="\${SELF}.orig"; STEP=0; MAX_ITER=16; BONUS_ITER=0; SPINNER_PID=""
 
 [[ ! -f "$ORIG" ]] && cp "$SELF" "$ORIG"
-_cleanup() { cp "$SELF" "\${SELF%.sh}_$(date +%s).log.sh"; cp "$ORIG" "$SELF"; echo -e "\\n\\033[36m[saved]\\033[0m"; }
+_cleanup() { [[ -n "\$SPINNER_PID" ]] && kill "\$SPINNER_PID" 2>/dev/null; printf "\\r\\033[K"; cp "$SELF" "\${SELF%.sh}_$(date +%s).log.sh"; cp "$ORIG" "$SELF"; echo -e "\\n\\033[36m[saved]\\033[0m"; }
 trap _cleanup EXIT
+_continue_journey() { BONUS_ITER=\$((BONUS_ITER + 16)); echo -e "\\033[36m[+16 iterations]\\033[0m"; }
 
 _ask() {
     local intent="$1"; local feedback="\${2:-}"; local remaining="\${3:-?}"; local full_prompt
@@ -339,9 +401,9 @@ _spin() { while :; do for c in · ·· ··· ···· ····· ' ····' ' 
 _evolve() {
     local intent="$1" feedback="" is_final="false" iter=0
     sed -i '/^_prompt$/,/^#$/d' "$SELF"
-    while [[ "$is_final" != "true" && $iter -lt $MAX_ITER ]]; do
-        ((iter++)); ((STEP++)); local remaining=$((MAX_ITER - iter))
-        _spin & local p=$!; local resp=$(_ask "$intent" "$feedback" "$remaining"); kill $p 2>/dev/null; printf "\\r\\033[K"
+    while [[ "$is_final" != "true" && $iter -lt $((MAX_ITER + BONUS_ITER)) ]]; do
+        ((iter++)); ((STEP++)); local remaining=$((MAX_ITER + BONUS_ITER - iter))
+        _spin & SPINNER_PID=$!; local resp=$(_ask "$intent" "$feedback" "$remaining"); kill \$SPINNER_PID 2>/dev/null; SPINNER_PID=""; printf "\\r\\033[K"
         is_final=$(echo "$resp" | grep -i '^FINAL:' | head -1 | sed 's/^FINAL:[[:space:]]*//' | tr '[:upper:]' '[:lower:]')
         local desc=$(echo "$resp" | grep -i '^DESCRIPTION:' | head -1 | sed 's/^DESCRIPTION:[[:space:]]*//')
         local code=$(echo "$resp" | sed -n '/^BASH_CODE:/,$ { /^BASH_CODE:/d; p }')
@@ -350,10 +412,14 @@ _evolve() {
         echo -e "\\033[32m[step $STEP]\\033[0m $desc"
         echo -e "\\n# STEP $STEP: $desc | FINAL: $is_final\\n$code" >> "$SELF"
         echo -e "\\033[36m[running...]\\033[0m"
-        local out rc tmpf=\$(mktemp)
-        if [[ "\$(uname)" == "Darwin" ]]; then script -q "\$tmpf" bash -c "eval \\"\$code\\""; else script -q -e -c "bash -c 'eval \\"\$code\\"'" "\$tmpf"; fi
+        local out rc tmpf=\$(mktemp) codef=\$(mktemp)
+        printf '%s' "\$code" > "\$codef"
+        if [[ "\$(uname)" == "Darwin" ]]; then script -q "\$tmpf" bash "\$codef"; else script -q -e -c "bash '\$codef'" "\$tmpf"; fi
+        rm -f "\$codef"
         rc=\$?; out=\$(perl -pe 's/\\e\\[[0-9;]*[mGKHJF]//g; s/\\r//g' "\$tmpf" 2>/dev/null || cat "\$tmpf"); rm -f "\$tmpf"
         [[ \$rc -ne 0 ]] && echo -e "\\033[31m[exit \$rc]\\033[0m"
+        # Append output immediately as comments (before next LLM call, in case of crash)
+        [[ -n "\$out" ]] && { local ln=\$(echo "\$out"|wc -l); if [[ \$ln -gt 1000 ]]; then { echo ""; echo "# PREV OUTPUT:"; echo "\$out"|head -400|uniq|sed 's/^/# /'; echo "# [...\$((ln-800)) snipped...]"; echo "\$out"|tail -400|uniq|sed 's/^/# /'; } >>"\$SELF"; else { echo ""; echo "# PREV OUTPUT:"; echo "\$out"|uniq|sed 's/^/# /'; } >>"\$SELF"; fi; }
         if [[ "$is_final" != "true" ]]; then
             feedback="\\nPREVIOUS OUTPUT (exit $rc):\\n$out\\n"
         elif [[ $rc -ne 0 && $rc -ne 141 && $iter -lt $MAX_ITER ]]; then
