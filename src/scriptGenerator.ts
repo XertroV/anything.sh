@@ -29,6 +29,7 @@ RULES:
 - For interactive experiences: use the best available tools (TUI, colors, ASCII art) to make something impressive
 - Only use TUI tools shown in INSTALLED TUI: line. To use unlisted tools, install them first (set FINAL: false, ask permission, install, then use)
 - QUALITY: Don't settle for minimal - create something impressive. The user will appreciate extra polish and creativity.
+- AVOID dark gray colors (e.g., \033[90m, "bright black") - they are invisible on black terminals. Use bold white (\033[1;37m), bright colors (\033[96m cyan, \033[93m yellow), or standard colors instead.
 - Use timing for effect: slow text reveals (pv, character-by-character), pauses for dramatic moments, animations where appropriate
 - When asking for input, ensure the user can see what they need to decide - pause after animations, recap after long output
 - Avoid clearing the screen, but if you need to during interactive experiences, confirm with the user first
@@ -154,6 +155,7 @@ BONUS_ITER=0  # Extra iterations granted via _continue_journey()
 SPINNER_PID=""  # Track spinner for cleanup
 AGENT_MODE=0  # Set to 1 with -a/--agent flag for non-interactive execution
 AGENT_REALTIME_FD=2  # Agent real-time output: 2=stderr, or use /dev/tty
+_OUT="/tmp/anything_out_\$\$"  # Output capture file for same-process execution
 
 # ─────────────────────────────────────────────────────────────────
 # TRACK ORIGINAL: For agent mode self-calling, track the original script
@@ -268,8 +270,175 @@ _continue_journey() {
     echo -e "\\033[36m[+16 iterations granted]\\033[0m"
 }
 
+
 # ─────────────────────────────────────────────────────────────────
-# EVOLVE: Iterative code generation with feedback loop
+# EVOLVE STEP: Single iteration of code generation (continuation-passing)
+# ─────────────────────────────────────────────────────────────────
+_evolve_step() {
+    local intent="\$1"
+    local prev_output="\${2:-}"
+    local step_num="\${3:-1}"
+    local prev_exit="\${4:-0}"
+
+    # Check iteration limit
+    if [[ \$step_num -gt \$((MAX_ITER + BONUS_ITER)) ]]; then
+        if [[ \$AGENT_MODE -eq 1 ]]; then
+            echo -e "\\033[31m[error]\\033[0m Max iterations reached without completion" >&2
+            exit 1
+        fi
+        echo -e "\\033[33m[max iterations reached]\\033[0m Task incomplete after \$((step_num - 1)) steps."
+        read -rp \$'\\033[95m  continue? [Y/n] \\033[0m' cont
+        if [[ -z "\$cont" || "\$cont" =~ ^[Yy] ]]; then
+            BONUS_ITER=\$((BONUS_ITER + MAX_ITER))
+            _evolve_step "\$intent" "\$prev_output" "\$step_num" "\$prev_exit"
+            return
+        fi
+        echo -e "\\033[36m[stopped]\\033[0m You can retry or try a different approach."
+        _prompt
+        return
+    fi
+
+    STEP=\$step_num
+    local remaining=\$((MAX_ITER + BONUS_ITER - step_num))
+
+    # Build feedback for LLM
+    local feedback=""
+    if [[ -n "\$prev_output" ]]; then
+        feedback="
+PREVIOUS STEP OUTPUT (exit code \$prev_exit):
+\$prev_output
+"
+    fi
+
+    # Start spinner
+    _spinner &
+    SPINNER_PID=\$!
+
+    local response=\$(_ask "\$intent" "\$feedback" "\$remaining")
+
+    # Stop spinner
+    kill \$SPINNER_PID 2>/dev/null
+    wait \$SPINNER_PID 2>/dev/null
+    SPINNER_PID=""
+    printf "\\r\\033[K"
+
+    # Parse structured response
+    local is_final=\$(echo "\$response" | grep -i '^FINAL:' | head -1 | sed 's/^FINAL:[[:space:]]*//' | tr '[:upper:]' '[:lower:]')
+    local description=\$(echo "\$response" | grep -i '^DESCRIPTION:' | head -1 | sed 's/^DESCRIPTION:[[:space:]]*//')
+    local code=\$(echo "\$response" | sed -n '/^BASH_CODE:/,\$ { /^BASH_CODE:/d; p }')
+
+    # Fallback: if no structured format, treat whole response as code
+    if [[ -z "\$code" ]]; then
+        code="\$response"
+        description="\$intent"
+        is_final="true"
+    fi
+
+    # Strip markdown fences if present
+    if echo "\$code" | grep -q '^\\\`\\\`\\\`'; then
+        code=\$(echo "\$code" | sed -n '/^\\\`\\\`\\\`/,/^\\\`\\\`\\\`/p' | sed '/^\\\`\\\`\\\`/d')
+    fi
+
+    if [[ -z "\$code" ]]; then
+        echo -e "\\033[31m[error]\\033[0m empty response"
+        _prompt
+        return
+    fi
+
+    echo -e "\\033[32m[step \$STEP]\\033[0m \$description"
+    local lines=\$(echo "\$code" | wc -l)
+    echo -e "\\033[33m[+\$lines lines]\\033[0m"
+
+    # Append step code wrapped in a function, with output capture and continuation
+    # No truncation needed - padding at end ensures bash hasn't read EOF yet
+    cat >> "\$SELF" <<EVOLUTION
+
+# ═══════════════════════════════════════════════════════════════
+# STEP \$STEP: \$description
+# Generated: \$(date '+%Y-%m-%d %H:%M:%S') | FINAL: \$is_final
+# ═══════════════════════════════════════════════════════════════
+_step\${STEP}() {
+\$code
+}
+_step\${STEP} 2>&1 | tee "\$_OUT"
+_evolve_continue "\$intent" "\\\${PIPESTATUS[0]}" "\$is_final" "\$STEP"
+EVOLUTION
+
+    # Return - bash will naturally read and execute the appended code
+    return
+}
+
+# ─────────────────────────────────────────────────────────────────
+# EVOLVE CONTINUE: Handle output capture and next iteration
+# ─────────────────────────────────────────────────────────────────
+_evolve_continue() {
+    local intent="\$1"
+    local exit_code="\$2"
+    local is_final="\$3"
+    local step_num="\$4"
+
+    # Read captured output
+    local output=""
+    [[ -f "\$_OUT" ]] && output=\$(cat "\$_OUT")
+
+    # Clean ANSI codes for LLM feedback
+    output=\$(echo "\$output" | perl -pe 's/\\e\\[[0-9;]*[mGKHJF]//g; s/\\r\\n/\\n/g; s/\\r//g' 2>/dev/null || echo "\$output")
+
+    [[ \$exit_code -ne 0 ]] && echo -e "\\033[31m[exit \$exit_code]\\033[0m"
+
+    # Append output as comments to script (for crash recovery)
+    if [[ \$AGENT_MODE -eq 0 && -n "\$output" ]]; then
+        local output_lines=\$(echo "\$output" | wc -l)
+        if [[ \$output_lines -gt 1000 ]]; then
+            {
+                echo ""
+                echo "# ───────────────────────────────────────────────────────────────"
+                echo "# OUTPUT FROM STEP \$step_num:"
+                echo "# ───────────────────────────────────────────────────────────────"
+                echo "\$output" | head -400 | uniq | sed 's/^/# /'
+                echo "#"
+                echo "# [...\$((output_lines - 800)) lines snipped...]"
+                echo "#"
+                echo "\$output" | tail -400 | uniq | sed 's/^/# /'
+            } >> "\$SELF"
+        else
+            {
+                echo ""
+                echo "# ───────────────────────────────────────────────────────────────"
+                echo "# OUTPUT FROM STEP \$step_num:"
+                echo "# ───────────────────────────────────────────────────────────────"
+                echo "\$output" | uniq | sed 's/^/# /'
+            } >> "\$SELF"
+        fi
+    fi
+
+    # Decide next action
+    if [[ "\$is_final" == "true" && \$exit_code -eq 0 ]]; then
+        # Success - return to prompt
+        if [[ \$AGENT_MODE -eq 1 ]]; then
+            # Agent mode: output result and exit
+            echo "\$output" | sed 's/^/@ /'
+            exit 0
+        fi
+        _prompt
+    elif [[ \$exit_code -ne 0 && \$exit_code -ne 141 ]]; then
+        # Error recovery (141 is SIGPIPE, ignore it)
+        if [[ "\$is_final" == "true" ]]; then
+            echo -e "\\033[33m[final step failed, attempting recovery...]\\033[0m"
+        fi
+        if [[ \$AGENT_MODE -eq 1 ]]; then
+            # Agent mode with error - output error and continue trying
+            echo "\$output" | sed 's/^/> /' >&2
+        fi
+        _evolve_step "\$intent" "FAILED (exit \$exit_code): \$output" \$((step_num + 1)) "\$exit_code"
+    else
+        # Continue with next step
+        _evolve_step "\$intent" "\$output" \$((step_num + 1)) "\$exit_code"
+    fi
+}
+
+# ─────────────────────────────────────────────────────────────────
+# EVOLVE: Iterative code generation with feedback loop (LEGACY - kept for reference)
 # ─────────────────────────────────────────────────────────────────
 _evolve() {
     local intent="$1"
@@ -461,7 +630,7 @@ _prompt() {
         read -rp \$'\\033[95m  what shall I become? \\033[0m' input || exit 0
     fi
     [[ -z "\$input" || "\$input" == "exit" ]] && exit 0
-    _evolve "\$input"
+    _evolve_step "\$input" "" 1 0
 }
 
 # ─────────────────────────────────────────────────────────────────
@@ -494,11 +663,16 @@ if [[ \$AGENT_MODE -eq 1 ]]; then
         echo -e "\\033[31m[error]\\033[0m Agent mode requires a prompt argument" >&2
         exit 1
     fi
-    _evolve "$1"
+    _evolve_step "\$1" "" 1 0
 else
-    [[ -n "\${1:-}" ]] && _evolve "$1" || _prompt
+    [[ -n "\${1:-}" ]] && _evolve_step "\$1" "" 1 0 || _prompt
 fi
-#
+# ─────────────────────────────────────────────────────────────────
+# PADDING: Bash reads files in chunks (~8KB). This padding ensures
+# bash hasn't reached EOF when we append code, so appended code
+# executes naturally. New code is appended after this padding.
+# ─────────────────────────────────────────────────────────────────
+${Array(100).fill('#'.repeat(80)).join('\n')}
 `;
 
 // Generate compact script with provider-specific CLI command
