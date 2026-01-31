@@ -191,7 +191,7 @@ export default function AnythingSH() {
   useEffect(() => {
     const interval = setInterval(() => {
       setExampleIndex((prev) => (prev + 1) % EXAMPLE_PROMPTS.length);
-    }, 3000); // Change every 3 seconds
+    }, 6000); // Change every 6 seconds
     return () => clearInterval(interval);
   }, []);
 
@@ -214,8 +214,17 @@ export default function AnythingSH() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  // Helper to get base URL including pathname for GitHub Pages subdirectories
+  const getBaseUrl = () => {
+    if (typeof window === 'undefined') return '';
+    const pathParts = window.location.pathname.split('/').filter(Boolean);
+    // If we're in a subdirectory (like /anything.sh/), include it
+    const basePath = pathParts.length > 0 ? '/' + pathParts[0] : '';
+    return window.location.origin + basePath;
+  };
+
   const handleCopyUrl = () => {
-    const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
+    const baseUrl = getBaseUrl();
     const url = `${baseUrl}/${provider}/${activeTab}/anything.sh`;
     navigator.clipboard.writeText(url);
     setUrlCopied(true);
@@ -223,7 +232,7 @@ export default function AnythingSH() {
   };
 
   // Compute download URL
-  const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
+  const baseUrl = getBaseUrl();
   const downloadUrl = `${baseUrl}/${provider}/${activeTab}/anything.sh`;
 
   return (
