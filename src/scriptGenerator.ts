@@ -32,14 +32,14 @@ RULES:
 - Your stdout/stderr feeds back to you, so output "Chapter 1 complete. Hero HP: 50" to inform your next step
 - Global variables persist across steps - declare without 'local' for state (HP=100, CHAPTER=1, INVENTORY=())
 - USER INPUT: Don't assume on vague tasks - ask. Prefer inline tools (gum, fzf, read -rp) that preserve context
-- CTRL+C HANDLING: In game loops, ALWAYS check exit codes after gum/fzf/read. If exit code is non-zero (especially 130), break the loop and return. Example: \`choice=\$(gum choose ...) || return\` or \`if ! choice=\$(gum choose ...); then return; fi\`
+- CTRL+C HANDLING: In game loops, ALWAYS check exit codes after gum/fzf/read. If exit code is non-zero (especially 130), break the loop and return. Example: choice=\\$(gum choose ...) || return
 - Full-screen TUI (whiptail/dialog) sparingly - include all context needed to decide in the dialog itself, recap after
 - Set FINAL: false after asking - response appears in next feedback
 - For interactive experiences: use the best available tools (TUI, colors, ASCII art) to make something impressive
 - Only use TUI tools shown in INSTALLED TUI: line. To use unlisted tools, install them first (set FINAL: false, ask permission, install, then use)
 - QUALITY: Don't settle for minimal - create something impressive. The user will appreciate extra polish and creativity.
 - AVOID dark gray colors (e.g., \033[90m, "bright black") - they are invisible on black terminals. Use bold white (\033[1;37m), bright colors (\033[96m cyan, \033[93m yellow), or standard colors instead.
-- AVOID piping to head/tail (e.g., \`cmd | head -20\`) - can hang due to SIGPIPE issues. Use process substitution or capture to variable first: \`output=\$(cmd); echo "\$output" | head -20\`
+- AVOID piping to head/tail (e.g., cmd | head -20) - can hang due to SIGPIPE issues. Use process substitution or capture to variable first: output=\\$(cmd); echo "\\$output" | head -20
 - Use timing for effect: slow text reveals (pv, character-by-character), pauses for dramatic moments, animations where appropriate
 - When asking for input, ensure the user can see what they need to decide - pause after animations, recap after long output
 - Avoid clearing the screen, but if you need to during interactive experiences, confirm with the user first
@@ -216,7 +216,7 @@ fi
 _cleanup() {
     local rc=\$?
     [[ -n "\$SPINNER_PID" ]] && kill "\$SPINNER_PID" 2>/dev/null
-    printf "\\r\\033[K"  # Clear spinner line
+    printf "\\r\\033[K" >&2  # Clear spinner line
     [[ -f "$ORIG" ]] || return \$rc
     local archive="\${SELF%.sh}_\$(date +%Y%m%d_%H%M%S).log.sh"
     cp "$SELF" "\$archive" 2>/dev/null || true
@@ -256,7 +256,7 @@ AGENT MODE: This script is running with -a/--agent flag (non-interactive).
 - Example: echo 'Created fib() function in ./lib/math.sh'"
     else
         AGENT_MODE_RULE="- AGENT MODE: The script supports -a/--agent flag for non-interactive execution. When generating code that will call anything.sh with -a/--agent, your FINAL: true step should echo a summary of what was created/modified.
-- In the first step, discover available TUI utilities AND ALWASY call \\\`<tool> --help\\\` on each to discover their supported arguments and patterns (colors, fonts, flags) before building the experience"
+- In the first step, discover available TUI utilities AND call '<tool> --help' on each to discover their supported arguments and patterns (colors, fonts, flags) before building the experience"
     fi
     local full_prompt
     read -r -d '' full_prompt <<_ANYTHING_PROMPT_EOF_
@@ -273,7 +273,7 @@ _spinner() {
     local frames=('·    ' '··   ' '···  ' '···· ' '·····' ' ····' '  ···' '   ··' '    ·' '     ')
     local i=0
     while true; do
-        printf "\\r\\033[36m%s\\033[0m pulsing..." "\${frames[i]}"
+        printf "\\r\\033[36m%s\\033[0m pulsing..." "\${frames[i]}" >&2
         i=$(( (i + 1) % \${#frames[@]} ))
         sleep 0.1
     done
@@ -337,7 +337,7 @@ PREVIOUS STEP OUTPUT (exit code \$prev_exit):
     kill \$SPINNER_PID 2>/dev/null
     wait \$SPINNER_PID 2>/dev/null
     SPINNER_PID=""
-    printf "\\r\\033[K"
+    printf "\\r\\033[K" >&2
 
     # Parse structured response
     local is_final=\$(echo "\$response" | grep -i '^FINAL:' | head -1 | sed 's/^FINAL:[[:space:]]*//' | tr '[:upper:]' '[:lower:]')
@@ -382,8 +382,11 @@ PREVIOUS STEP OUTPUT (exit code \$prev_exit):
 # Generated: \$(date '+%Y-%m-%d %H:%M:%S') | FINAL: \$is_final
 # ═══════════════════════════════════════════════════════════════
 \$code
-_step\${STEP} 2> >(tee "\$_ERR" >&2) > >(tee "\$_OUT")
-_evolve_continue "\$intent" "\$?" "\$is_final" "\$STEP"
+_rc=0  # Initialize before set -e
+set -e  # Exit on error (including Ctrl+C)
+_step\${STEP} 2> >(tee "\$_ERR" >&2) > >(tee "\$_OUT") && _rc=0 || _rc=\$?
+set +e
+_evolve_continue "\$intent" "\$_rc" "\$is_final" "\$STEP"
 EVOLUTION
 
     # Return - bash will naturally read and execute the appended code
@@ -543,10 +546,10 @@ if [[ \$AGENT_MODE -eq 1 && -n "\${1:-}" ]]; then TEMP="./anything_agent_\$\$.sh
 
 # Backup & cleanup
 [[ "$SELF" == "\${ANYTHING_ORIGINAL}" && ! -f "$ORIG" ]] && cp "$SELF" "$ORIG"
-_cleanup() { [[ -n "\$SPINNER_PID" ]] && kill "\$SPINNER_PID" 2>/dev/null; printf "\\r\\033[K"; cp "$SELF" "\${SELF%.sh}_\$(date +%s).log.sh"; [[ "$SELF" == "\${ANYTHING_ORIGINAL}" ]] && cp "$ORIG" "$SELF"; echo -e "\\n\\033[36m[saved]\\033[0m"; }
+_cleanup() { [[ -n "\$SPINNER_PID" ]] && kill "\$SPINNER_PID" 2>/dev/null; printf "\\r\\033[K" >&2; cp "$SELF" "\${SELF%.sh}_\$(date +%s).log.sh"; [[ "$SELF" == "\${ANYTHING_ORIGINAL}" ]] && cp "$ORIG" "$SELF"; echo -e "\\n\\033[36m[saved]\\033[0m"; }
 trap _cleanup EXIT INT TERM
 _continue_journey() { BONUS_ITER=\$((BONUS_ITER + 16)); echo -e "\\033[36m[+16 iterations]\\033[0m"; }
-_spin() { while :; do for c in · ·· ··· ···· ····· ' ····' '  ···' '   ··' '    ·' '     '; do printf "\\r\\033[36m%s\\033[0m" "\$c"; sleep .1; done; done; }
+_spin() { while :; do for c in · ·· ··· ···· ····· ' ····' '  ···' '   ··' '    ·' '     '; do printf "\\r\\033[36m%s\\033[0m" "\$c" >&2; sleep .1; done; done; }
 
 _ask() {
     local intent="\$1"; local feedback="\${2:-}"; local remaining="\${3:-?}"; local agent_ctx=""; local AGENT_MODE_RULE=""; local script_content; script_content=\$(cat "\$SELF")
@@ -554,7 +557,7 @@ _ask() {
         agent_ctx=" AGENT MODE: running non-interactive. No 'read' or interactive tools. FINAL: true step should echo a summary."
     else
         AGENT_MODE_RULE="- AGENT MODE: The script supports -a/--agent flag for non-interactive execution.
-- In the first step, discover available TUI utilities AND call \\\`<tool> --help\\\` on each to understand their options (colors, fonts, flags) before building the experience"
+- In the first step, discover available TUI utilities AND call '<tool> --help' on each to understand their options (colors, fonts, flags) before building the experience"
     fi
     local full_prompt
     read -r -d '' full_prompt <<PROMPT
@@ -575,7 +578,7 @@ _evolve_step() {
     [[ -n "\$prev_output" ]] && feedback="\\nPREVIOUS STEP OUTPUT (exit code \$prev_exit):\\n\$prev_output\\n"
     _spin & SPINNER_PID=\$!
     local resp=\$(_ask "\$intent" "\$feedback" "\$remaining")
-    kill \$SPINNER_PID 2>/dev/null; wait \$SPINNER_PID 2>/dev/null; SPINNER_PID=""; printf "\\r\\033[K"
+    kill \$SPINNER_PID 2>/dev/null; wait \$SPINNER_PID 2>/dev/null; SPINNER_PID=""; printf "\\r\\033[K" >&2
     local is_final=\$(echo "\$resp" | grep -i '^FINAL:' | head -1 | sed 's/^FINAL:[[:space:]]*//' | tr '[:upper:]' '[:lower:]')
     local desc=\$(echo "\$resp" | grep -i '^DESCRIPTION:' | head -1 | sed 's/^DESCRIPTION:[[:space:]]*//')
     local code=\$(echo "\$resp" | sed -n '/^BASH_CODE:/,\$ { /^BASH_CODE:/d; p }')
@@ -593,8 +596,11 @@ _evolve_step() {
 
 # STEP \$STEP: \$desc | FINAL: \$is_final
 \$code
-_step\${STEP} 2> >(tee "\$_ERR" >&2) > >(tee "\$_OUT")
-_evolve_continue "\$intent" "\$?" "\$is_final" "\$STEP"
+_rc=0  # Initialize before set -e
+set -e  # Exit on error (including Ctrl+C)
+_step\${STEP} 2> >(tee "\$_ERR" >&2) > >(tee "\$_OUT") && _rc=0 || _rc=\$?
+set +e
+_evolve_continue "\$intent" "\$_rc" "\$is_final" "\$STEP"
 EVOLUTION
     return
 }
