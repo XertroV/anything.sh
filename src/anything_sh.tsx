@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Terminal, Copy, ShieldAlert, FileCode, Skull, Zap, Eye, Command, Download } from 'lucide-react';
+import { Terminal, Copy, ShieldAlert, FileCode, Skull, Zap, Eye, Command, Download, X } from 'lucide-react';
 import { getRandomExitMessage } from './exitMessages';
 import { 
   LLM_PROMPT, 
@@ -145,6 +145,15 @@ export default function AnythingSH() {
   const [urlCopied, setUrlCopied] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [exitMessage] = useState(() => getRandomExitMessage());
+  const [warningDismissed, setWarningDismissed] = useState(false);
+
+  // Load warning dismissed state from localStorage
+  useEffect(() => {
+    const dismissed = localStorage.getItem('anything.sh_warning_dismissed');
+    if (dismissed === 'true') {
+      setWarningDismissed(true);
+    }
+  }, []);
 
   // Generate scripts based on selected provider
   const SCRIPT_FULL = getScriptFull(provider);
@@ -154,6 +163,11 @@ export default function AnythingSH() {
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  const handleDismissWarning = () => {
+    setWarningDismissed(true);
+    localStorage.setItem('anything.sh_warning_dismissed', 'true');
+  };
 
   const handleCopy = () => {
     const text = activeTab === 'full' ? SCRIPT_FULL : SCRIPT_COMPACT;
@@ -196,6 +210,28 @@ export default function AnythingSH() {
             </div>
           </div>
 
+          {/* Warning Banner - Dismissible */}
+          {!warningDismissed && (
+            <div className="mt-8 mb-4">
+              <div className="relative bg-amber-950/30 border border-amber-800/50 p-4 text-amber-400/90 text-xs">
+                <button
+                  onClick={handleDismissWarning}
+                  className="absolute top-2 right-2 p-1 text-amber-600 hover:text-amber-400 transition-colors"
+                  title="Dismiss warning"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+                <div className="flex gap-4 items-start pr-6">
+                  <ShieldAlert className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="block mb-1 text-amber-400 uppercase tracking-wide">Here Be Dragons</strong>
+                    This script executes LLM-generated code <span className="text-amber-200">without confirmation</span>. It will cheerfully delete your files, email your boss, or reorganise your music collection by astrological sign. The slime mold does not ask permission. <span className="text-amber-200">Use in a VM or container.</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="pt-8">
             <ManPageSection title="NAME">
               <span className="text-white font-bold">anything.sh</span> — the slime mold of bash. 
@@ -230,16 +266,6 @@ export default function AnythingSH() {
               <p className="text-zinc-500 italic">
                 It's not written. It's <span className="text-emerald-400">grown</span>.
               </p>
-            </ManPageSection>
-
-            <ManPageSection title="FLAGS & WARNINGS">
-              <div className="flex gap-4 items-start bg-amber-950/20 p-4 border border-amber-900/50 text-amber-500/90 text-xs">
-                <ShieldAlert className="w-5 h-5 flex-shrink-0 mt-0.5" />
-                <div>
-                  <strong className="block mb-1 text-amber-400 uppercase tracking-wide">Here Be Dragons</strong>
-                  This script executes LLM-generated code <span className="text-amber-200">without confirmation</span>. It will cheerfully delete your files, email your boss, or reorganise your music collection by astrological sign. The slime mold does not ask permission. <span className="text-amber-200">Use in a VM or container.</span>
-                </div>
-              </div>
             </ManPageSection>
             
             <div className="pt-12 text-zinc-600 text-xs space-y-1">
