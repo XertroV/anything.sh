@@ -259,6 +259,9 @@ export default function AnythingSH() {
               <span className="bg-emerald-900/30 text-emerald-400 border border-emerald-800/50 px-2 py-0.5 text-xs uppercase tracking-wider">v0.1.0-alpha</span>
               <span className="text-zinc-500 text-xs uppercase">Autopoietic Execution Loop</span>
             </div>
+            <p className="text-sm text-zinc-400 pt-2">
+              the bash script <span className="text-white font-black uppercase tracking-wide bg-emerald-900/50 px-1">is</span> the <span className="text-emerald-400 font-bold italic">context</span>
+            </p>
             <a
               href="https://github.com/xertrov/anything.sh"
               target="_blank"

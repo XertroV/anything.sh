@@ -386,7 +386,7 @@ _rc=0  # Initialize before set -e
 set -e  # Exit on error (including Ctrl+C)
 _step\${STEP} 2> >(tee "\$_ERR" >&2) > >(tee "\$_OUT") && _rc=0 || _rc=\$?
 set +e
-_evolve_continue "\$intent" "\$_rc" "\$is_final" "\$STEP"
+_evolve_continue "\$intent" "\\$_rc" "\$is_final" "\$STEP"
 EVOLUTION
 
     # Return - bash will naturally read and execute the appended code
@@ -600,7 +600,7 @@ _rc=0  # Initialize before set -e
 set -e  # Exit on error (including Ctrl+C)
 _step\${STEP} 2> >(tee "\$_ERR" >&2) > >(tee "\$_OUT") && _rc=0 || _rc=\$?
 set +e
-_evolve_continue "\$intent" "\$_rc" "\$is_final" "\$STEP"
+_evolve_continue "\$intent" "\\$_rc" "\$is_final" "\$STEP"
 EVOLUTION
     return
 }
