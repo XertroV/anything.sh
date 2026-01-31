@@ -5,6 +5,7 @@ import {
   LLM_PROMPT, 
   PROVIDERS, 
   ALL_PROVIDERS, 
+  UNTESTED_PROVIDERS,
   type ProviderId, 
   getScriptFull, 
   getScriptCompact 
@@ -425,7 +426,7 @@ export default function AnythingSH() {
               </div>
               <div className="flex items-center gap-3">
                 {/* Untested provider warning */}
-                {['codex', 'aider', 'gemini', 'goose', 'continue', 'opencode', 'kimi', 'openrouter'].includes(provider) && (
+                {UNTESTED_PROVIDERS.includes(provider) && (
                   <span className="text-[8px] bg-amber-600/80 text-black px-1.5 py-0.5 rounded-sm font-bold uppercase tracking-wider">
                     untested
                   </span>

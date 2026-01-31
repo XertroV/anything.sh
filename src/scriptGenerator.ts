@@ -17,12 +17,13 @@ BASH_CODE:
 <helper functions first, then step\${STEP}() function - see CODE STRUCTURE below>
 
 CODE STRUCTURE (required):
-1. First: define any helper functions at the TOP LEVEL (outside step function) - these persist across steps
-2. Then: define step\${STEP}() containing the execution code (use the step number from STEP N INSTRUCTIONS below)
+1. First: define global variables and helper functions at TOP LEVEL (outside step function)
+2. Then: define step\${STEP}() - MUST be exactly step1, step2, step3 etc. (not step1_init or similar)
 3. Do NOT call step - the system calls it automatically
 Example for step 2:
-  helper() { echo "I persist across steps"; }
-  step2() { helper; echo "running step 2"; }
+  SCORE=0  # global - persists across steps
+  helper() { echo "I persist"; }
+  step2() { helper; SCORE=\$((SCORE+10)); }
 
 RULES:
 - If you need to check something (installed packages, file contents, etc), set FINAL: false
@@ -35,7 +36,10 @@ RULES:
 - IMPORTANT: Use absolute paths or verify paths exist before running commands. CWD may not be where you expect.
 - MULTI-PART EXPERIENCES: For games, stories, or tutorials, use FINAL: false after each chapter/segment
 - Your stdout/stderr feeds back to you, so output "Chapter 1 complete. Hero HP: 50" to inform your next step
-- Global variables persist across steps - declare without 'local' for state (HP=100, CHAPTER=1, INVENTORY=())
+GLOBAL STATE (critical for multi-step):
+- Declare shared variables at TOP LEVEL without 'local': HP=100  INVENTORY=()
+- Variables with 'local' inside functions are LOST after that function returns
+- Pattern: declare globals before step1(), then read/write them from any step function
 - USER INPUT: Don't assume on vague tasks - ask. Prefer inline tools (gum, fzf, read -rp) that preserve context
 - CTRL+C HANDLING: In game loops, ALWAYS check exit codes after gum/fzf/read. If exit code is non-zero (especially 130), break the loop and return. Example: choice=\\$(gum choose ...) || return
 - Full-screen TUI (whiptail/dialog) sparingly - include all context needed to decide in the dialog itself, recap after
@@ -115,7 +119,7 @@ export const PROVIDERS = {
   },
   opencode: {
     name: 'OpenCode',
-    cmd: 'opencode run -q <<< "$full_prompt"',
+    cmd: 'opencode run <<< "$full_prompt"',
   },
   kimi: {
     name: 'Kimi',
@@ -143,6 +147,11 @@ export type ProviderId = keyof typeof PROVIDERS;
 export const ALL_PROVIDERS: ProviderId[] = [
   'claude', 'codex', 'aider', 'gemini', 'goose', 'continue', 'opencode', 'kimi',
   'groq', 'openrouter'
+];
+
+// Providers that show an "untested" badge in the UI
+export const UNTESTED_PROVIDERS: ProviderId[] = [
+  'codex', 'aider', 'goose', 'continue', 'opencode', 'kimi', 'openrouter'
 ];
 
 // Generate full script with provider-specific CLI command
@@ -260,7 +269,7 @@ AGENT MODE: This script is running with -a/--agent flag (non-interactive).
 - Example: echo 'Created fib() function in ./lib/math.sh'"
     else
         AGENT_MODE_RULE="- AGENT MODE: The script supports -a/--agent flag for non-interactive execution. When generating code that will call anything.sh with -a/--agent, your FINAL: true step should echo a summary of what was created/modified.
-- In the first step, discover available TUI utilities AND call '<tool> --help' on each to discover their supported arguments and patterns (colors, fonts, flags) before building the experience"
+- FIRST STEP FOR INTERACTIVES: Call _discover_tui to see valid TUI flags/designs, declare global variables for state, and define/test TUI helper functions"
     fi
     local full_prompt
     read -r -d '' full_prompt <<_ANYTHING_PROMPT_EOF_
@@ -291,6 +300,23 @@ _continue_journey() {
     echo -e "\\033[36m[+16 iterations granted]\\033[0m"
 }
 
+# ─────────────────────────────────────────────────────────────────
+# DISCOVER TUI: Show available TUI tool options (call in step 1)
+# ─────────────────────────────────────────────────────────────────
+_discover_tui() {
+    echo "=== TUI TOOL REFERENCE ==="
+    for tool in gum fzf boxes figlet toilet cowsay; do
+        command -v "\$tool" &>/dev/null || continue
+        echo "--- \$tool ---"
+        "\$tool" --help 2>&1 | head -30
+        case "\$tool" in
+            boxes) echo "Available designs:"; boxes -l 2>&1 | awk '/^[a-z]/{print \$1}' | head -20 | tr '\\n' ' '; echo ;;
+            gum) echo "Subcommands: choose, input, confirm, spin, style, filter, pager, write" ;;
+        esac
+        echo
+    done
+    echo "=== END TUI REFERENCE ==="
+}
 
 # ─────────────────────────────────────────────────────────────────
 # EVOLVE STEP: Single iteration of code generation (continuation-passing)
@@ -563,6 +589,7 @@ _cleanup() { [[ -n "\$SPINNER_PID" ]] && kill "\$SPINNER_PID" 2>/dev/null; print
 trap _cleanup EXIT INT TERM
 _continue_journey() { BONUS_ITER=\$((BONUS_ITER + 16)); echo -e "\\033[36m[+16 iterations]\\033[0m"; }
 _spin() { while :; do for c in · ·· ··· ···· ····· ' ····' '  ···' '   ··' '    ·' '     '; do printf "\\r\\033[36m%s\\033[0m" "\$c" >&2; sleep .1; done; done; }
+_discover_tui() { echo "=== TUI TOOL REFERENCE ==="; for t in gum fzf boxes figlet toilet cowsay; do command -v "\$t" &>/dev/null || continue; echo "--- \$t ---"; "\$t" --help 2>&1|head -30; case "\$t" in boxes) echo "Designs:"; boxes -l 2>&1|awk '/^[a-z]/{print \$1}'|head -20|tr '\\n' ' '; echo;; gum) echo "Subcommands: choose input confirm spin style filter pager write";; esac; echo; done; echo "=== END TUI REFERENCE ==="; }
 
 _ask() {
     local intent="\$1"; local feedback="\${2:-}"; local remaining="\${3:-?}"; local agent_ctx=""; local AGENT_MODE_RULE=""; local script_content; script_content=\$(sed '/^# ─.*OUTPUT FROM STEP/,/^# ─\|EOF\|^$/d' "\$SELF" 2>/dev/null || cat "\$SELF")
@@ -570,7 +597,7 @@ _ask() {
         agent_ctx=" AGENT MODE: running non-interactive. No 'read' or interactive tools. FINAL: true step should echo a summary."
     else
         AGENT_MODE_RULE="- AGENT MODE: The script supports -a/--agent flag for non-interactive execution.
-- In the first step, discover available TUI utilities AND call '<tool> --help' on each to understand their options (colors, fonts, flags) before building the experience"
+- FIRST STEP FOR INTERACTIVES: Call _discover_tui to see valid TUI flags/designs, declare global variables for state, and define/test TUI helper functions"
     fi
     local full_prompt
     read -r -d '' full_prompt <<PROMPT
