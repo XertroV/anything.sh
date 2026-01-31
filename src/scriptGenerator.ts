@@ -9,7 +9,15 @@ OUTPUT FORMAT (exactly 3 lines, then code):
 FINAL: <true if task complete, false if you need to see output first>
 DESCRIPTION: <short description of this step>
 BASH_CODE:
-<your bash code here - no markdown, no fences>
+<helper functions first, then _step\${STEP}() function - see CODE STRUCTURE below>
+
+CODE STRUCTURE (required):
+1. First: define any helper functions at the TOP LEVEL (outside _step function) - these persist across steps
+2. Then: define _step\${STEP}() containing the execution code (use the step number from STEP N INSTRUCTIONS below)
+3. Do NOT call _step - the system calls it automatically
+Example for step 2:
+  helper() { echo "I persist across steps"; }
+  _step2() { helper; echo "running step 2"; }
 
 RULES:
 - If you need to check something (installed packages, file contents, etc), set FINAL: false
@@ -18,7 +26,7 @@ RULES:
 - Don't set FINAL: true prematurely - only when the entire task/experience is genuinely complete, not after partial progress
 - No markdown fences, no explanation outside the format above
 - Never include XML, HTML, or markup tags in bash code
-- Declare reusable helper functions globally at the top of your code block - they persist across all steps
+- Helper functions defined at top level persist across ALL steps - put reusable code there
 - IMPORTANT: Use absolute paths or verify paths exist before running commands. CWD may not be where you expect.
 - MULTI-PART EXPERIENCES: For games, stories, or tutorials, use FINAL: false after each chapter/segment
 - Your stdout/stderr feeds back to you, so output "Chapter 1 complete. Hero HP: 50" to inform your next step
@@ -30,27 +38,28 @@ RULES:
 - Only use TUI tools shown in INSTALLED TUI: line. To use unlisted tools, install them first (set FINAL: false, ask permission, install, then use)
 - QUALITY: Don't settle for minimal - create something impressive. The user will appreciate extra polish and creativity.
 - AVOID dark gray colors (e.g., \033[90m, "bright black") - they are invisible on black terminals. Use bold white (\033[1;37m), bright colors (\033[96m cyan, \033[93m yellow), or standard colors instead.
+- AVOID piping to head/tail (e.g., \`cmd | head -20\`) - can hang due to SIGPIPE issues. Use process substitution or capture to variable first: \`output=\$(cmd); echo "\$output" | head -20\`
 - Use timing for effect: slow text reveals (pv, character-by-character), pauses for dramatic moments, animations where appropriate
 - When asking for input, ensure the user can see what they need to decide - pause after animations, recap after long output
 - Avoid clearing the screen, but if you need to during interactive experiences, confirm with the user first
 - Generate substantial, content-rich steps: full scenes with setup, action, dialogue AND choices - not minimal fragments. LLM calls are slow.
 - Build complete interactive systems in single steps: combat loops, dialogue trees, puzzles should run to completion - don't fragment across iterations without good reason
 - For complex experiences: use first 1-2 steps to create utility functions (UI helpers, combat engine, state display) so later steps are richer and more efficient. Leave design notes in comments.
+- FIRST STEP SETUP: Use the first step to establish backend helper functions for state management, configuration, logging, or other foundational utilities. Create functions like save_state(), load_config(), log_message(), etc. that subsequent steps can reuse.
 - For long experiences: call _continue_journey() at chapter/quest completion to add 16 more iterations
 
-EXAMPLE (checking before installing):
+EXAMPLE (step 1 - checking before installing):
 FINAL: false
 DESCRIPTION: Check if package is installed
 BASH_CODE:
 check_deps() { command -v figlet &>/dev/null && echo "INSTALLED" || echo "NOT_INSTALLED"; }
-check_deps
+_step1() { check_deps; }
 
-EXAMPLE (final step after seeing output):
+EXAMPLE (step 2 - after seeing output):
 FINAL: true
 DESCRIPTION: Install figlet
 BASH_CODE:
-install_figlet() { sudo pacman -S --noconfirm figlet && figlet "Hello"; }
-install_figlet
+_step2() { sudo pacman -S --noconfirm figlet && figlet "Hello"; }
 
 \${ANYTHING_EXTRA:+
 === EXTRA CONTEXT ===
@@ -161,7 +170,8 @@ BONUS_ITER=0  # Extra iterations granted via _continue_journey()
 SPINNER_PID=""  # Track spinner for cleanup
 AGENT_MODE=0  # Set to 1 with -a/--agent flag for non-interactive execution
 AGENT_REALTIME_FD=2  # Agent real-time output: 2=stderr, or use /dev/tty
-_OUT="/tmp/anything_out_\$\$"  # Output capture file for same-process execution
+_OUT="/tmp/anything_out_\$\$"  # Stdout capture file for same-process execution
+_ERR="/tmp/anything_err_\$\$"  # Stderr capture file
 
 # ─────────────────────────────────────────────────────────────────
 # TRACK ORIGINAL: For agent mode self-calling, track the original script
@@ -221,7 +231,7 @@ _cleanup() {
     fi
     exit \$rc
 }
-trap _cleanup EXIT
+trap _cleanup EXIT INT TERM
 
 # ─────────────────────────────────────────────────────────────────
 # ORACLE: Query ${PROVIDERS[provider].name} with script context
@@ -245,7 +255,7 @@ AGENT MODE: This script is running with -a/--agent flag (non-interactive).
 - Example: echo 'Created fib() function in ./lib/math.sh'"
     else
         AGENT_MODE_RULE="- AGENT MODE: The script supports -a/--agent flag for non-interactive execution. When generating code that will call anything.sh with -a/--agent, your FINAL: true step should echo a summary of what was created/modified.
-- In the first step, discover available TUI utilities AND call \\\`<tool> --help\\\` on each to understand their options (colors, fonts, flags) before building the experience"
+- In the first step, discover available TUI utilities AND ALWASY call \\\`<tool> --help\\\` on each to discover their supported arguments and patterns (colors, fonts, flags) before building the experience"
     fi
     local full_prompt
     read -r -d '' full_prompt <<_ANYTHING_PROMPT_EOF_
@@ -340,10 +350,8 @@ PREVIOUS STEP OUTPUT (exit code \$prev_exit):
         is_final="true"
     fi
 
-    # Strip markdown fences if present (see TS comment above for escaping notes)
-    if echo "\$code" | grep -q '^\`\`\`'; then
-        code=\$(echo "\$code" | sed -n '/^\`\`\`/,/^\`\`\`/p' | sed '/^\`\`\`/d')
-    fi
+    # Strip markdown fences if present - just remove fence lines, keep all content
+    code=\$(echo "\$code" | sed '/^\`\`\`/d')
 
     if [[ -z "\$code" ]]; then
         echo -e "\\033[31m[error]\\033[0m empty response"
@@ -351,23 +359,30 @@ PREVIOUS STEP OUTPUT (exit code \$prev_exit):
         return
     fi
 
+    # Syntax check before appending - catches errors before they break the script
+    local syntax_err
+    if ! syntax_err=\$(bash -n <<<"\$code" 2>&1); then
+        echo -e "\\033[31m[syntax error]\\033[0m"
+        echo "\$syntax_err"
+        _evolve_step "\$intent" "SYNTAX ERROR in your code:\\n\$syntax_err\\n\\nPlease fix and ensure _step\${STEP}() is properly defined." \$((step_num + 1)) "1"
+        return
+    fi
+
     echo -e "\\033[32m[step \$STEP]\\033[0m \$description"
     local lines=\$(echo "\$code" | wc -l)
     echo -e "\\033[33m[+\$lines lines]\\033[0m"
 
-    # Append step code wrapped in a function, with output capture and continuation
-    # No truncation needed - padding at end ensures bash hasn't read EOF yet
+    # Append step code directly (not wrapped) - helper functions at top level persist across steps
+    # LLM defines _step\${STEP}() in the code, we call it with output capture
     cat >> "\$SELF" <<EVOLUTION
 
 # ═══════════════════════════════════════════════════════════════
 # STEP \$STEP: \$description
 # Generated: \$(date '+%Y-%m-%d %H:%M:%S') | FINAL: \$is_final
 # ═══════════════════════════════════════════════════════════════
-_step\${STEP}() {
 \$code
-}
-_step\${STEP} 2>&1 | tee "\$_OUT"
-_evolve_continue "\$intent" "\\\${PIPESTATUS[0]}" "\$is_final" "\$STEP"
+_step\${STEP} 2> >(tee "\$_ERR" >&2) > >(tee "\$_OUT")
+_evolve_continue "\$intent" "\$?" "\$is_final" "\$STEP"
 EVOLUTION
 
     # Return - bash will naturally read and execute the appended code
@@ -383,9 +398,13 @@ _evolve_continue() {
     local is_final="\$3"
     local step_num="\$4"
 
-    # Read captured output
-    local output=""
+    # Read captured output (stdout and stderr)
+    local output="" errors=""
     [[ -f "\$_OUT" ]] && output=\$(cat "\$_OUT")
+    [[ -f "\$_ERR" ]] && errors=\$(cat "\$_ERR")
+
+    # Merge stderr into output for LLM feedback (if any)
+    [[ -n "\$errors" ]] && output="\$output\$'\\n'STDERR:\\n\$errors"
 
     # Clean ANSI codes for LLM feedback
     output=\$(echo "\$output" | perl -pe 's/\\e\\[[0-9;]*[mGKHJF]//g; s/\\r\\n/\\n/g; s/\\r//g' 2>/dev/null || echo "\$output")
@@ -419,7 +438,11 @@ _evolve_continue() {
     fi
 
     # Decide next action
-    if [[ "\$is_final" == "true" && \$exit_code -eq 0 ]]; then
+    # 130 = SIGINT (Ctrl+C), 143 = SIGTERM - user wants to stop
+    if [[ \$exit_code -eq 130 || \$exit_code -eq 143 ]]; then
+        echo -e "\\033[33m[interrupted]\\033[0m"
+        exit \$exit_code
+    elif [[ "\$is_final" == "true" && \$exit_code -eq 0 ]]; then
         # Success - return to prompt
         if [[ \$AGENT_MODE -eq 1 ]]; then
             # Agent mode: output result and exit
@@ -498,13 +521,15 @@ fi
 `;
 
 // Generate compact script with provider-specific CLI command
+// Uses same continuation-passing self-append model as full script
 export const getScriptCompact = (provider: ProviderId) => `#!/bin/bash
 # anything.sh [compact] · ${PROVIDERS[provider].name}
 set -uo pipefail
 SELF="$0"; ORIG="\${SELF}.orig"; STEP=0; MAX_ITER=160; BONUS_ITER=0; SPINNER_PID=""; AGENT_MODE=0; AGENT_REALTIME_FD=2
+_OUT="/tmp/anything_out_\$\$"; _ERR="/tmp/anything_err_\$\$"
 [[ -z "\${ANYTHING_ORIGINAL:-}" ]] && export ANYTHING_ORIGINAL="$SELF"
 
-# Auto-localize: copy to current dir if running from system path
+# Auto-localize
 if [[ "$SELF" == *"/bin/"* && ! -f "$ORIG" ]]; then LOCAL="./anything_\$(date +%Y%m%d_%H%M%S).sh"; cp "$SELF" "$LOCAL"; chmod +x "$LOCAL"; echo -e "\\033[36m[localized]\\033[0m $LOCAL"; exec "$LOCAL" "\$@"; fi
 
 # Parse args
@@ -513,11 +538,12 @@ POSITIONAL=(); while [[ \$# -gt 0 ]]; do case "\$1" in -a|--agent) AGENT_MODE=1;
 # Agent mode temp copy
 if [[ \$AGENT_MODE -eq 1 && -n "\${1:-}" ]]; then TEMP="./anything_agent_\$\$.sh"; cp "\${ANYTHING_ORIGINAL}" "\$TEMP"; chmod +x "\$TEMP"; exec "\$TEMP" "\$@"; fi
 
-# Backup only for original
+# Backup & cleanup
 [[ "$SELF" == "\${ANYTHING_ORIGINAL}" && ! -f "$ORIG" ]] && cp "$SELF" "$ORIG"
 _cleanup() { [[ -n "\$SPINNER_PID" ]] && kill "\$SPINNER_PID" 2>/dev/null; printf "\\r\\033[K"; cp "$SELF" "\${SELF%.sh}_\$(date +%s).log.sh"; [[ "$SELF" == "\${ANYTHING_ORIGINAL}" ]] && cp "$ORIG" "$SELF"; echo -e "\\n\\033[36m[saved]\\033[0m"; }
-trap _cleanup EXIT
+trap _cleanup EXIT INT TERM
 _continue_journey() { BONUS_ITER=\$((BONUS_ITER + 16)); echo -e "\\033[36m[+16 iterations]\\033[0m"; }
+_spin() { while :; do for c in · ·· ··· ···· ····· ' ····' '  ···' '   ··' '    ·' '     '; do printf "\\r\\033[36m%s\\033[0m" "\$c"; sleep .1; done; done; }
 
 _ask() {
     local intent="\$1"; local feedback="\${2:-}"; local remaining="\${3:-?}"; local agent_ctx=""; local AGENT_MODE_RULE=""; local script_content; script_content=\$(cat "\$SELF")
@@ -534,58 +560,68 @@ PROMPT
     ${PROVIDERS[provider].cmd}
 }
 
-_spin() { while :; do for c in · ·· ··· ···· ····· ' ····' '  ···' '   ··' '    ·' '     '; do printf "\\r\\033[36m%s\\033[0m" "\$c"; sleep .1; done; done; }
-_evolve() {
-    local intent="\$1" feedback="" is_final="false" iter=0 out="" rc=0
-    sed -i '/^_prompt$/,/^#$/d' "\$SELF"
-    while [[ "\$is_final" != "true" && \$iter -lt \$((MAX_ITER + BONUS_ITER)) ]]; do
-        ((iter++)); ((STEP++)); local remaining=\$((MAX_ITER + BONUS_ITER - iter))
-        _spin & SPINNER_PID=\$!; local resp=\$(_ask "\$intent" "\$feedback" "\$remaining"); kill \$SPINNER_PID 2>/dev/null; SPINNER_PID=""; printf "\\r\\033[K"
-        is_final=\$(echo "\$resp" | grep -i '^FINAL:' | head -1 | sed 's/^FINAL:[[:space:]]*//' | tr '[:upper:]' '[:lower:]')
-        local desc=\$(echo "\$resp" | grep -i '^DESCRIPTION:' | head -1 | sed 's/^DESCRIPTION:[[:space:]]*//')
-        local code=\$(echo "\$resp" | sed -n '/^BASH_CODE:/,\$ { /^BASH_CODE:/d; p }')
-        [[ -z "\$code" ]] && code="\$resp" && desc="\$intent" && is_final="true"
-        echo "\$code" | grep -q '^\`\`\`' && code=\$(echo "\$code" | sed -n '/^\`\`\`/,/^\`\`\`/p' | sed '/^\`\`\`/d')
-        echo -e "\\033[32m[step \$STEP]\\033[0m \$desc"
-        echo -e "\\n# STEP \$STEP: \$desc | FINAL: \$is_final\\n\$code" >> "\$SELF"
-        echo -e "\\033[36m[running...]\\033[0m"
-        local tmpf=\$(mktemp) codef=\$(mktemp)
-        printf '%s' "\$code" > "\$codef"
-        if [[ \$AGENT_MODE -eq 1 ]]; then
-            if [[ "\$(uname)" == "Darwin" ]]; then script -q "\$tmpf" bash "\$codef" | sed 's/^/> /' >&\$AGENT_REALTIME_FD; else script -q -e -c "bash '\$codef'" "\$tmpf" | sed 's/^/> /' >&\$AGENT_REALTIME_FD; fi
-            rc=\${PIPESTATUS[0]}
-        else
-            if [[ "\$(uname)" == "Darwin" ]]; then script -q "\$tmpf" bash "\$codef"; else script -q -e -c "bash '\$codef'" "\$tmpf"; fi
-            rc=\$?
-        fi
-        rm -f "\$codef"; out=\$(perl -pe 's/\\e\\[[0-9;]*[mGKHJF]//g; s/\\r//g' "\$tmpf" 2>/dev/null || cat "\$tmpf"); rm -f "\$tmpf"
-        [[ \$rc -ne 0 ]] && echo -e "\\033[31m[exit \$rc]\\033[0m"
-        # Append output immediately as comments (before next LLM call, in case of crash) - skip in agent mode
-        [[ \$AGENT_MODE -eq 0 && -n "\$out" ]] && { local ln=\$(echo "\$out"|wc -l); if [[ \$ln -gt 1000 ]]; then { echo ""; echo "# PREV OUTPUT:"; echo "\$out"|head -400|uniq|sed 's/^/# /'; echo "# [...\$((ln-800)) snipped...]"; echo "\$out"|tail -400|uniq|sed 's/^/# /'; } >>"\$SELF"; else { echo ""; echo "# PREV OUTPUT:"; echo "\$out"|uniq|sed 's/^/# /'; } >>"\$SELF"; fi; }
-        if [[ "\$is_final" != "true" ]]; then
-            feedback="\\nPREVIOUS OUTPUT (exit \$rc):\\n\$out\\n"
-        elif [[ \$rc -ne 0 && \$rc -ne 141 && \$iter -lt \$MAX_ITER ]]; then
-            echo -e "\\033[33m[recovery...]\\033[0m"; is_final="false"
-            feedback="\\nFINAL FAILED (exit \$rc):\\n\$out\\nPlease fix.\\n"
-        fi
-    done
-    if [[ "\$is_final" != "true" ]]; then
-        if [[ \$AGENT_MODE -eq 1 ]]; then echo -e "\\033[31m[error]\\033[0m Incomplete" >&2; exit 1; fi
-        echo -e "\\033[33m[max iterations]\\033[0m Incomplete after \$iter steps."
-        read -rp \$'\\033[95m  continue? [Y/n] \\033[0m' c
-        if [[ -z "\$c" || "\$c" =~ ^[Yy] ]]; then iter=0; _evolve "\$intent"; return; fi
-        echo -e "\\033[36m[stopped]\\033[0m"
+_evolve_step() {
+    local intent="\$1" prev_output="\${2:-}" step_num="\${3:-1}" prev_exit="\${4:-0}"
+    if [[ \$step_num -gt \$((MAX_ITER + BONUS_ITER)) ]]; then
+        if [[ \$AGENT_MODE -eq 1 ]]; then echo -e "\\033[31m[error]\\033[0m Max iterations" >&2; exit 1; fi
+        echo -e "\\033[33m[max iterations]\\033[0m"; read -rp \$'\\033[95m  continue? [Y/n] \\033[0m' c
+        if [[ -z "\$c" || "\$c" =~ ^[Yy] ]]; then BONUS_ITER=\$((BONUS_ITER + MAX_ITER)); _evolve_step "\$intent" "\$prev_output" "\$step_num" "\$prev_exit"; return; fi
+        _prompt; return
     fi
-    if [[ \$AGENT_MODE -eq 1 ]]; then
-        if [[ \$rc -ne 0 ]]; then echo "\$out" | sed 's/^/> /' >&2; exit \$rc; else echo "\$out" | sed 's/^/@ /'; exit 0; fi
+    STEP=\$step_num; local remaining=\$((MAX_ITER + BONUS_ITER - step_num)) feedback=""
+    [[ -n "\$prev_output" ]] && feedback="\\nPREVIOUS STEP OUTPUT (exit code \$prev_exit):\\n\$prev_output\\n"
+    _spin & SPINNER_PID=\$!
+    local resp=\$(_ask "\$intent" "\$feedback" "\$remaining")
+    kill \$SPINNER_PID 2>/dev/null; wait \$SPINNER_PID 2>/dev/null; SPINNER_PID=""; printf "\\r\\033[K"
+    local is_final=\$(echo "\$resp" | grep -i '^FINAL:' | head -1 | sed 's/^FINAL:[[:space:]]*//' | tr '[:upper:]' '[:lower:]')
+    local desc=\$(echo "\$resp" | grep -i '^DESCRIPTION:' | head -1 | sed 's/^DESCRIPTION:[[:space:]]*//')
+    local code=\$(echo "\$resp" | sed -n '/^BASH_CODE:/,\$ { /^BASH_CODE:/d; p }')
+    [[ -z "\$code" ]] && code="\$resp" && desc="\$intent" && is_final="true"
+    code=\$(echo "\$code" | sed '/^\`\`\`/d')  # Strip markdown fences
+    if [[ -z "\$code" ]]; then echo -e "\\033[31m[error]\\033[0m empty response"; _prompt; return; fi
+    # Syntax check before appending
+    local syn_err; if ! syn_err=\$(bash -n <<<"\$code" 2>&1); then
+        echo -e "\\033[31m[syntax error]\\033[0m \$syn_err"
+        _evolve_step "\$intent" "SYNTAX ERROR:\\n\$syn_err\\nFix and define _step\${STEP}() properly." \$((step_num + 1)) "1"; return
     fi
-    echo -e "\\n_prompt\\n#" >> "\$SELF"
-    _prompt
+    echo -e "\\033[32m[step \$STEP]\\033[0m \$desc"
+    echo -e "\\033[33m[+\$(echo "\$code" | wc -l) lines]\\033[0m"
+    cat >> "\$SELF" <<EVOLUTION
+
+# STEP \$STEP: \$desc | FINAL: \$is_final
+\$code
+_step\${STEP} 2> >(tee "\$_ERR" >&2) > >(tee "\$_OUT")
+_evolve_continue "\$intent" "\$?" "\$is_final" "\$STEP"
+EVOLUTION
+    return
+}
+
+_evolve_continue() {
+    local intent="\$1" exit_code="\$2" is_final="\$3" step_num="\$4" output="" errors=""
+    [[ -f "\$_OUT" ]] && output=\$(cat "\$_OUT")
+    [[ -f "\$_ERR" ]] && errors=\$(cat "\$_ERR")
+    [[ -n "\$errors" ]] && output="\$output\$'\\n'STDERR:\\n\$errors"
+    output=\$(echo "\$output" | perl -pe 's/\\e\\[[0-9;]*[mGKHJF]//g; s/\\r//g' 2>/dev/null || echo "\$output")
+    [[ \$exit_code -ne 0 ]] && echo -e "\\033[31m[exit \$exit_code]\\033[0m"
+    # Append output as comments (crash recovery)
+    [[ \$AGENT_MODE -eq 0 && -n "\$output" ]] && { local ln=\$(echo "\$output"|wc -l); if [[ \$ln -gt 1000 ]]; then { echo "# OUTPUT:"; echo "\$output"|head -400|sed 's/^/# /'; echo "# [...snipped...]"; echo "\$output"|tail -400|sed 's/^/# /'; } >>"\$SELF"; else { echo "# OUTPUT:"; echo "\$output"|sed 's/^/# /'; } >>"\$SELF"; fi; }
+    # 130=SIGINT, 143=SIGTERM - user wants to stop
+    if [[ \$exit_code -eq 130 || \$exit_code -eq 143 ]]; then echo -e "\\033[33m[interrupted]\\033[0m"; exit \$exit_code
+    elif [[ "\$is_final" == "true" && \$exit_code -eq 0 ]]; then
+        [[ \$AGENT_MODE -eq 1 ]] && { echo "\$output" | sed 's/^/@ /'; exit 0; }
+        _prompt
+    elif [[ \$exit_code -ne 0 && \$exit_code -ne 141 ]]; then
+        [[ "\$is_final" == "true" ]] && echo -e "\\033[33m[recovery...]\\033[0m"
+        [[ \$AGENT_MODE -eq 1 ]] && echo "\$output" | sed 's/^/> /' >&2
+        _evolve_step "\$intent" "FAILED (exit \$exit_code): \$output" \$((step_num + 1)) "\$exit_code"
+    else
+        _evolve_step "\$intent" "\$output" \$((step_num + 1)) "\$exit_code"
+    fi
 }
 
 _prompt() {
-    local i; if command -v gum &>/dev/null; then i=\$(gum input --placeholder "become?" --width 60) || exit; echo -e "\\033[95m  → \\033[0m\$i"; else read -rp \$'\\033[95m  become? \\033[0m' i || exit; fi
-    [[ -z "\$i" ]] && exit; _evolve "\$i"
+    echo ""; local i; if command -v gum &>/dev/null; then i=\$(gum input --placeholder "become?" --width 60) || exit; echo -e "\\033[95m  → \\033[0m\$i"; else read -rp \$'\\033[95m  become? \\033[0m' i || exit; fi
+    [[ -z "\$i" || "\$i" == "exit" ]] && exit; _evolve_step "\$i" "" 1 0
 }
 
 if [[ \$AGENT_MODE -eq 0 ]]; then
@@ -594,10 +630,10 @@ if [[ \$AGENT_MODE -eq 0 ]]; then
     echo ""
 fi
 if [[ \$AGENT_MODE -eq 1 ]]; then
-    if [[ -z "\${1:-}" ]]; then echo "[error] Agent mode requires prompt" >&2; exit 1; fi
-    _evolve "$1"
+    [[ -z "\${1:-}" ]] && { echo "[error] Agent mode requires prompt" >&2; exit 1; }
+    _evolve_step "\$1" "" 1 0
 else
-    [[ -n "\${1:-}" ]] && _evolve "$1" || _prompt
+    [[ -n "\${1:-}" ]] && _evolve_step "\$1" "" 1 0 || _prompt
 fi
-#
+# END OF ORIGINAL SCRIPT - appended code follows
 `;
