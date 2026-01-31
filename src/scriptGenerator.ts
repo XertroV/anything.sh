@@ -1,6 +1,11 @@
 // Script generation utilities - shared between build and frontend
 
 // Shared LLM prompt template (embedded in bash scripts)
+// Prompt structured for optimal LLM caching:
+// 1. Static rules/format (cacheable across all requests)
+// 2. System info (cacheable per session)
+// 3. Script content (changes each step)
+// 4. Dynamic content (task, feedback, step - always different)
 export const LLM_PROMPT = `You are the bash code generator anything.sh in an iterative execution loop.
  [ anything.sh - https://xertrov.github.io/anything.sh/ - Author: XertroV - License: Unlicense ]
 ---
@@ -9,15 +14,15 @@ OUTPUT FORMAT (exactly 3 lines, then code):
 FINAL: <true if task complete, false if you need to see output first>
 DESCRIPTION: <short description of this step>
 BASH_CODE:
-<helper functions first, then _step\${STEP}() function - see CODE STRUCTURE below>
+<helper functions first, then step\${STEP}() function - see CODE STRUCTURE below>
 
 CODE STRUCTURE (required):
-1. First: define any helper functions at the TOP LEVEL (outside _step function) - these persist across steps
-2. Then: define _step\${STEP}() containing the execution code (use the step number from STEP N INSTRUCTIONS below)
-3. Do NOT call _step - the system calls it automatically
+1. First: define any helper functions at the TOP LEVEL (outside step function) - these persist across steps
+2. Then: define step\${STEP}() containing the execution code (use the step number from STEP N INSTRUCTIONS below)
+3. Do NOT call step - the system calls it automatically
 Example for step 2:
   helper() { echo "I persist across steps"; }
-  _step2() { helper; echo "running step 2"; }
+  step2() { helper; echo "running step 2"; }
 
 RULES:
 - If you need to check something (installed packages, file contents, etc), set FINAL: false
@@ -54,31 +59,30 @@ FINAL: false
 DESCRIPTION: Check if package is installed
 BASH_CODE:
 check_deps() { command -v figlet &>/dev/null && echo "INSTALLED" || echo "NOT_INSTALLED"; }
-_step1() { check_deps; }
+step1() { check_deps; }
 
 EXAMPLE (step 2 - after seeing output):
 FINAL: true
 DESCRIPTION: Install figlet
 BASH_CODE:
-_step2() { sudo pacman -S --noconfirm figlet && figlet "Hello"; }
+step2() { sudo pacman -S --noconfirm figlet && figlet "Hello"; }
 
 \${ANYTHING_EXTRA:+
 === EXTRA CONTEXT ===
 \$ANYTHING_EXTRA
 }
 
-=== CURRENT SCRIPT CONTENT ===
-\${script_content}
-
-=== CURRENT SYSTEM ===
+=== SYSTEM (cacheable per session) ===
 SYSTEM: \$(uname -sm) \$(. /etc/os-release 2>/dev/null && echo "\$PRETTY_NAME" || sw_vers -productName 2>/dev/null) | \$SHELL
 CWD: \$PWD
 DISPLAY: \$([[ -n "\${WAYLAND_DISPLAY:-}" ]] && echo "wayland:\$WAYLAND_DISPLAY" || [[ -n "\${DISPLAY:-}" ]] && echo "x11:\$DISPLAY" || echo "NONE")\$([[ -n "\${SSH_TTY:-}" ]] && echo " [ssh]")
 INSTALLED TUI: \$(for t in whiptail dialog gum fzf figlet toilet cowsay lolcat boxes pv nms chafa glow bat cmatrix slides fastfetch asciinema delta; do command -v \$t &>/dev/null && printf "%s " "\$t"; done)
 
-STEP \${STEP} INSTRUCTIONS:
-\${AGENT_MODE_RULE}
+=== CURRENT SCRIPT ===
+\${script_content}
 
+=== STEP \${STEP} (dynamic) ===
+\${AGENT_MODE_RULE}
 TASK: \$intent
 TURNS REMAINING: \$remaining (if 1-2 and this is a long experience, call _continue_journey() to add 16 more; otherwise prioritize completing or informing user why it can't be done)
 \$feedback`;
@@ -99,7 +103,7 @@ export const PROVIDERS = {
   },
   gemini: {
     name: 'Gemini',
-    cmd: 'gemini -y <<< "$full_prompt"',
+    cmd: 'gemini -y --model auto <<< "$full_prompt"',
   },
   goose: {
     name: 'Goose',
@@ -348,7 +352,7 @@ PREVIOUS STEP OUTPUT (exit code \$prev_exit):
     # Check if LLM CLI failed
     if [[ \$ask_exit -ne 0 ]]; then
         echo -e "\\033[31m[error]\\033[0m LLM CLI failed (exit \$ask_exit)"
-        echo "  The Claude CLI may have timed out or hit a rate limit."
+        echo "  The LLM CLI may have timed out or hit a rate limit."
         echo "  Response was: '\$response'"
         _prompt
         return
@@ -380,7 +384,7 @@ PREVIOUS STEP OUTPUT (exit code \$prev_exit):
     if ! syntax_err=\$(bash -n <<<"\$code" 2>&1); then
         echo -e "\\033[31m[syntax error]\\033[0m"
         echo "\$syntax_err"
-        _evolve_step "\$intent" "SYNTAX ERROR in your code:\\n\$syntax_err\\n\\nPlease fix and ensure _step\${STEP}() is properly defined." \$((step_num + 1)) "1"
+        _evolve_step "\$intent" "SYNTAX ERROR in your code:\\n\$syntax_err\\n\\nPlease fix and ensure step\${STEP}() is properly defined." \$((step_num + 1)) "1"
         return
     fi
 
@@ -389,7 +393,7 @@ PREVIOUS STEP OUTPUT (exit code \$prev_exit):
     echo -e "\\033[33m[+\$lines lines]\\033[0m"
 
     # Append step code directly (not wrapped) - helper functions at top level persist across steps
-    # LLM defines _step\${STEP}() in the code, we call it with output capture
+    # LLM defines step\${STEP}() in the code, we call it with output capture
     cat >> "\$SELF" <<EVOLUTION
 
 # ═══════════════════════════════════════════════════════════════
@@ -399,7 +403,7 @@ PREVIOUS STEP OUTPUT (exit code \$prev_exit):
 \$code
 _rc=0  # Initialize before set -e
 set -e  # Exit on error (including Ctrl+C)
-_step\${STEP} < /dev/null > >(tee "\$_OUT") && _rc=0 || _rc=\$?
+step\${STEP} < /dev/null > >(tee "\$_OUT") && _rc=0 || _rc=\$?
 set +e
 _evolve_continue "\$intent" "\\$_rc" "\$is_final" "\$STEP"
 EVOLUTION
@@ -588,7 +592,7 @@ _evolve_step() {
     _spin & SPINNER_PID=\$!
     local resp; local ask_exit=0; resp=\$(_ask "\$intent" "\$feedback" "\$remaining") || ask_exit=\$?
     kill \$SPINNER_PID 2>/dev/null; wait \$SPINNER_PID 2>/dev/null; SPINNER_PID=""; printf "\\r\\033[K" >&2
-    if [[ \$ask_exit -ne 0 ]]; then echo -e "\\033[31m[error]\\033[0m LLM CLI failed (exit \$ask_exit)"; echo "  Claude CLI may have timed out or hit rate limit."; _prompt; return; fi
+    if [[ \$ask_exit -ne 0 ]]; then echo -e "\\033[31m[error]\\033[0m LLM CLI failed (exit \$ask_exit)"; echo "  LLM CLI may have timed out or hit rate limit."; _prompt; return; fi
     local is_final=\$(echo "\$resp" | grep -i '^FINAL:' | head -1 | sed 's/^FINAL:[[:space:]]*//' | tr '[:upper:]' '[:lower:]')
     local desc=\$(echo "\$resp" | grep -i '^DESCRIPTION:' | head -1 | sed 's/^DESCRIPTION:[[:space:]]*//')
     local code=\$(echo "\$resp" | sed -n '/^BASH_CODE:/,\$ { /^BASH_CODE:/d; p }')
@@ -608,7 +612,7 @@ _evolve_step() {
 \$code
 _rc=0  # Initialize before set -e
 set -e  # Exit on error (including Ctrl+C)
-_step\${STEP} < /dev/null > >(tee "\$_OUT") && _rc=0 || _rc=\$?
+step\${STEP} < /dev/null > >(tee "\$_OUT") && _rc=0 || _rc=\$?
 set +e
 _evolve_continue "\$intent" "\\$_rc" "\$is_final" "\$STEP"
 EVOLUTION
