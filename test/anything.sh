@@ -2,7 +2,7 @@
 # ╔════════════════════════════════════════════════════════════════╗
 # ║  anything.sh - Autopoietic Self-Modifying Execution Loop       ║
 # ║  A script that evolves by appending LLM-generated code.        ║
-# ║  Provider: Claude                                              ║
+# ║  Provider: Groq API                                            ║
 # ╚════════════════════════════════════════════════════════════════╝
 # USAGE: ./anything.sh ["initial prompt"]
 
@@ -15,6 +15,7 @@ SELF="$0"
 ORIG="${SELF}.orig"
 STEP=0
 MAX_ITER=16  # Max LLM calls per task (increase for complex tasks)
+BONUS_ITER=0  # Extra iterations granted via _continue_journey()
 SPINNER_PID=""  # Track spinner for cleanup
 
 # ─────────────────────────────────────────────────────────────────
@@ -41,7 +42,7 @@ _cleanup() {
 trap _cleanup EXIT
 
 # ─────────────────────────────────────────────────────────────────
-# ORACLE: Query Claude with script context
+# ORACLE: Query Groq API with script context
 # ─────────────────────────────────────────────────────────────────
 _ask() {
     local intent="$1"
@@ -54,10 +55,11 @@ You are a bash code generator in an iterative execution loop.
 SYSTEM: $(uname -sm) $(. /etc/os-release 2>/dev/null && echo "$PRETTY_NAME" || sw_vers -productName 2>/dev/null) | $SHELL
 CWD: $PWD
 DISPLAY: $([[ -n "${WAYLAND_DISPLAY:-}" ]] && echo "wayland:$WAYLAND_DISPLAY" || [[ -n "${DISPLAY:-}" ]] && echo "x11:$DISPLAY" || echo "NONE")$([[ -n "${SSH_TTY:-}" ]] && echo " [ssh]")
-TUI: $(for t in whiptail dialog gum fzf figlet toilet cowsay lolcat boxes pv nms chafa glow bat cmatrix slides fastfetch asciinema delta; do command -v $t &>/dev/null && printf "%s " "$t"; done)
+INSTALLED TUI: $(for t in whiptail dialog gum fzf figlet toilet cowsay lolcat boxes pv nms chafa glow bat cmatrix slides fastfetch asciinema delta; do command -v $t &>/dev/null && printf "%s " "$t"; done)
+${ANYTHING_EXTRA:+EXTRA: $ANYTHING_EXTRA}
 
 TASK: $intent
-TURNS REMAINING: $remaining (if 1-2, prioritize completing the task or informing user why it can't be done)
+TURNS REMAINING: $remaining (if 1-2 and this is a long experience, call _continue_journey() to add 16 more; otherwise prioritize completing or informing user why it can't be done)
 $feedback
 
 OUTPUT FORMAT (exactly 3 lines, then code):
@@ -70,6 +72,7 @@ RULES:
 - If you need to check something (installed packages, file contents, etc), set FINAL: false
 - When FINAL: false, your code runs and stdout/stderr is sent back to you
 - When FINAL: true, task is complete and user is prompted for next task
+- Don't set FINAL: true prematurely - only when the entire task/experience is genuinely complete, not after partial progress
 - No markdown fences, no explanation outside the format above
 - Never include XML, HTML, or markup tags in bash code
 - Declare reusable helper functions globally at the top of your code block - they persist across all steps
@@ -82,6 +85,7 @@ RULES:
 - Full-screen TUI (whiptail/dialog) sparingly - include all context needed to decide in the dialog itself, recap after
 - Set FINAL: false after asking - response appears in next feedback
 - For interactive experiences: use the best available tools (TUI, colors, ASCII art) to make something impressive
+- Only use TUI tools shown in INSTALLED TUI: line. To use unlisted tools, install them first (set FINAL: false, ask permission, install, then use)
 - QUALITY: Don't settle for minimal - create something impressive. The user will appreciate extra polish and creativity.
 - Use timing for effect: slow text reveals (pv, character-by-character), pauses for dramatic moments, animations where appropriate
 - When asking for input, ensure the user can see what they need to decide - pause after animations, recap after long output
@@ -89,6 +93,7 @@ RULES:
 - Generate substantial, content-rich steps: full scenes with setup, action, dialogue AND choices - not minimal fragments. LLM calls are slow.
 - Build complete interactive systems in single steps: combat loops, dialogue trees, puzzles should run to completion - don't fragment across iterations without good reason
 - For complex experiences: use first 1-2 steps to create utility functions (UI helpers, combat engine, state display) so later steps are richer and more efficient. Leave design notes in comments.
+- For long experiences: call _continue_journey() at chapter/quest completion to add 16 more iterations
 
 EXAMPLE (checking before installing):
 FINAL: false
@@ -105,7 +110,10 @@ step${STEP}() { sudo pacman -S --noconfirm figlet && figlet "Hello"; }
 step${STEP}
 PROMPT
 
-    claude -p "$full_prompt" --model sonnet --dangerously-skip-permissions 2>/dev/null
+    curl -s https://api.groq.com/openai/v1/chat/completions \
+      -H "Authorization: Bearer $GROQ_API_KEY" -H "Content-Type: application/json" \
+      -d "$(jq -n --arg p "$full_prompt" '{model:"openai/gpt-oss-120b",messages:[{role:"user",content:$p}],temperature:0.7,max_tokens:4096}')" \
+      | jq -r '.choices[0].message.content // empty'
 }
 
 # ─────────────────────────────────────────────────────────────────
@@ -122,6 +130,14 @@ _spinner() {
 }
 
 # ─────────────────────────────────────────────────────────────────
+# CONTINUE JOURNEY: Add more iterations for long experiences
+# ─────────────────────────────────────────────────────────────────
+_continue_journey() {
+    BONUS_ITER=$((BONUS_ITER + 16))
+    echo -e "\033[36m[+16 iterations granted]\033[0m"
+}
+
+# ─────────────────────────────────────────────────────────────────
 # EVOLVE: Iterative code generation with feedback loop
 # ─────────────────────────────────────────────────────────────────
 _evolve() {
@@ -133,10 +149,10 @@ _evolve() {
     # Remove trailing _prompt and # from script (so reruns replay without prompting)
     sed -i '/^_prompt$/,/^#$/d' "$SELF"
 
-    while [[ "$is_final" != "true" && $iteration -lt $MAX_ITER ]]; do
+    while [[ "$is_final" != "true" && $iteration -lt $((MAX_ITER + BONUS_ITER)) ]]; do
         ((iteration++))
         ((STEP++))
-        local remaining=$((MAX_ITER - iteration))
+        local remaining=$((MAX_ITER + BONUS_ITER - iteration))
 
         # Start spinner
         _spinner &
@@ -284,7 +300,7 @@ _prompt() {
 # ─────────────────────────────────────────────────────────────────
 echo -e "\033[32m┌─────────────────────────────────────┐\033[0m"
 echo -e "\033[32m│\033[0m   anything.sh · autopoietic loop    \033[32m│\033[0m"
-echo -e "\033[32m│\033[0m   provider: claude                  \033[32m│\033[0m"
+echo -e "\033[32m│\033[0m   provider: groq api                \033[32m│\033[0m"
 echo -e "\033[32m└─────────────────────────────────────┘\033[0m"
 echo "  Ctrl+C or 'exit' to save & quit"
 echo ""
@@ -304,2796 +320,2434 @@ echo ""
 [[ -n "${1:-}" ]] && _evolve "$1" || _prompt
 #
 
-
 # ═══════════════════════════════════════════════════════════════
-# STEP 1: Initialize game engine and utility functions
-# Generated: 2026-01-31 10:54:46 | FINAL: false
+# STEP 1: Ask user to start the Bash FPS demo and ensure required terminal capabilities are present
+# Generated: 2026-01-31 11:54:17 | FINAL: false
 # ═══════════════════════════════════════════════════════════════
-# === GAME STATE (persists across steps) ===
-PLAYER_NAME=""
-PLAYER_CLASS=""
-HP=100
-MAX_HP=100
-STAMINA=100
-MAX_STAMINA=100
-INSIGHT=0
-BLOOD_ECHOES=0
-CHAPTER=0
-LOCATION="Hunter's Dream"
-
-# Inventory tracking
-declare -a INVENTORY=()
-declare -a EQUIPPED=()
-
-# === UI UTILITIES ===
-ui_banner() {
-    local text="$1"
-    echo ""
-    figlet -f small "$text" | pv -qL 200
-    echo ""
+# Global helpers
+setup_terminal() {
+    # Ensure we can control cursor and clear screen
+    command -v tput >/dev/null || { echo "tput not found, required for screen handling."; exit 1; }
+    # Hide cursor
+    tput civis
+    # Restore cursor on exit
+    trap 'tput cnorm; exit' INT TERM EXIT
 }
-
-ui_divider() {
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-}
-
-ui_slow_text() {
-    local text="$1"
-    local speed="${2:-50}"
-    echo "$text" | pv -qL "$speed"
-}
-
-ui_typewriter() {
-    local text="$1"
-    local i
-    for ((i=0; i<${#text}; i++)); do
-        echo -n "${text:$i:1}"
-        sleep 0.02
+draw_frame() {
+    local -n map=$1
+    tput clear
+    for line in "${map[@]}"; do
+        echo "$line"
     done
-    echo ""
+    echo -e "\nControls: w/a/s/d = move, f = fire, q = quit"
 }
-
-show_stats() {
-    ui_divider
-    echo "📍 Location: $LOCATION"
-    echo "❤️  HP: $HP/$MAX_HP | ⚡ Stamina: $STAMINA/$MAX_STAMINA | 👁️  Insight: $INSIGHT | 🩸 Blood Echoes: $BLOOD_ECHOES"
-    if [ ${#INVENTORY[@]} -gt 0 ]; then
-        echo "🎒 Inventory: ${INVENTORY[*]}"
-    fi
-    ui_divider
+init_map() {
+    # Simple 10x20 map (walls around, some enemies)
+    MAP=(
+"####################"
+"#@      #         E#"
+"#   ##  #   ##      #"
+"#   ##  #   ##   E  #"
+"#        ####       #"
+"#   E                #"
+"#        ##         #"
+"#   ##        ##    #"
+"#          E        #"
+"####################"
+)
+    # Player position and direction
+    PLAYER_X=1
+    PLAYER_Y=1
+    PLAYER_DIR="right"
+    SCORE=0
 }
-
-# === COMBAT ENGINE ===
-combat_round() {
-    local enemy_name="$1"
-    local enemy_hp="$2"
-    local enemy_dmg="$3"
-    local player_dmg="${4:-15}"
-    
-    while [ "$enemy_hp" -gt 0 ] && [ "$HP" -gt 0 ]; do
-        show_stats
-        echo ""
-        echo "⚔️  $enemy_name | HP: $enemy_hp"
-        echo ""
-        
-        local action
-        action=$(gum choose "⚔️  Attack" "🛡️  Dodge & Counter" "🧪 Use Vial" "🏃 Retreat" --header "Choose your action:")
-        
-        case "$action" in
-            *Attack*)
-                local dmg=$((player_dmg + RANDOM % 10))
-                enemy_hp=$((enemy_hp - dmg))
-                ui_slow_text "You strike for $dmg damage!" 100
-                ;;
-            *Dodge*)
-                if [ $((RANDOM % 100)) -lt 70 ]; then
-                    local dmg=$((player_dmg + 15))
-                    enemy_hp=$((enemy_hp - dmg))
-                    ui_slow_text "Perfect dodge! Critical hit for $dmg damage!" 100
-                    continue
-                else
-                    ui_slow_text "You mistimed the dodge..." 100
-                fi
-                ;;
-            *Vial*)
-                if [ "$HP" -lt "$MAX_HP" ]; then
-                    HP=$((HP + 40))
-                    [ "$HP" -gt "$MAX_HP" ] && HP=$MAX_HP
-                    ui_slow_text "You drink a blood vial. HP restored to $HP." 100
-                else
-                    ui_slow_text "You're already at full health." 100
-                    continue
-                fi
-                ;;
-            *Retreat*)
-                ui_slow_text "You attempt to flee into the mist..." 100
-                return 1
-                ;;
-        esac
-        
-        if [ "$enemy_hp" -gt 0 ]; then
-            sleep 0.5
-            local e_dmg=$((enemy_dmg + RANDOM % 5))
-            HP=$((HP - e_dmg))
-            ui_slow_text "💀 $enemy_name strikes you for $e_dmg damage!" 100
-            sleep 0.8
+update_map() {
+    # Rebuild map string array from current state
+    local new_map=()
+    for ((y=0; y<${#MAP[@]}; y++)); do
+        line="${MAP[y]}"
+        # Replace player position
+        if (( y == PLAYER_Y )); then
+            line="${line:0:PLAYER_X}@${line:PLAYER_X+1}"
         fi
+        new_map+=("$line")
     done
-    
-    if [ "$HP" -le 0 ]; then
-        return 2
-    else
-        return 0
+    MAP=("${new_map[@]}")
+}
+move_player() {
+    local dir=$1
+    local nx=$PLAYER_X ny=$PLAYER_Y
+    case $dir in
+        up) ((ny--));;
+        down) ((ny++));;
+        left) ((nx--));;
+        right) ((nx++));;
+    esac
+    # Check bounds and walls
+    local target_char="${MAP[ny]:nx:1}"
+    if [[ $target_char != "#" ]]; then
+        PLAYER_X=$nx
+        PLAYER_Y=$ny
+        PLAYER_DIR=$dir
     fi
 }
-
-# === CHARACTER CREATION ===
-step1() {
-    clear
-    ui_banner "YHARNAM"
-    ui_slow_text "The city of Yharnam, known for its medical remedies and the mysterious Healing Church..." 60
-    sleep 1
-    ui_slow_text "Tonight, the hunt begins anew." 60
-    sleep 1
-    echo ""
-    
-    ui_divider
-    ui_typewriter "A figure in the mist approaches you..."
-    sleep 0.5
-    echo ""
-    ui_slow_text '"Ah, you must be the new hunter. Tell me, what name shall I inscribe in the records?"' 70
-    echo ""
-    
-    PLAYER_NAME=$(gum input --placeholder "Enter your hunter's name" --prompt "Name: ")
-    [ -z "$PLAYER_NAME" ] && PLAYER_NAME="Nameless Hunter"
-    
-    echo ""
-    ui_slow_text "\"$PLAYER_NAME... I see. And your discipline?\"" 70
-    echo ""
-    
-    PLAYER_CLASS=$(gum choose \
-        "⚔️  Hunter - Balanced fighter (HP: 100, Stamina: 100)" \
-        "🗡️  Skill Hunter - Swift and deadly (HP: 85, Stamina: 120)" \
-        "🛡️  Fortitude Hunter - Tank (HP: 130, Stamina: 80)" \
-        "🔮 Insight Hunter - Arcane mastery (HP: 90, Insight: 5)" \
-        --header "Choose your origin:")
-    
-    case "$PLAYER_CLASS" in
-        *Skill*)
-            PLAYER_CLASS="Skill Hunter"
-            HP=85; MAX_HP=85
-            STAMINA=120; MAX_STAMINA=120
-            ;;
-        *Fortitude*)
-            PLAYER_CLASS="Fortitude Hunter"
-            HP=130; MAX_HP=130
-            STAMINA=80; MAX_STAMINA=80
-            ;;
-        *Insight*)
-            PLAYER_CLASS="Insight Hunter"
-            HP=90; MAX_HP=90
-            INSIGHT=5
-            ;;
-        *)
-            PLAYER_CLASS="Hunter"
-            ;;
+fire() {
+    local x=$PLAYER_X y=$PLAYER_Y
+    case $PLAYER_DIR in
+        up) ((y--));;
+        down) ((y++));;
+        left) ((x--));;
+        right) ((x++));;
     esac
-    
-    INVENTORY=("Saw Cleaver" "Hunter Pistol" "3x Blood Vials")
-    
-    sleep 1
-    clear
-    ui_banner "AWAKENING"
-    show_stats
-    echo ""
-    ui_slow_text "\"$PLAYER_NAME, the $PLAYER_CLASS... The night beckons.\"" 70
-    sleep 1
-    ui_slow_text "\"You awaken in the Hunter's Dream, a refuge between hunts.\"" 70
-    sleep 1
-    echo ""
-    ui_typewriter "Before you stands a weathered workshop, gaslit lanterns casting dancing shadows on brass mechanisms."
-    sleep 0.5
-    echo ""
-    ui_slow_text "To your left, a series of gravestones serve as gateways to the waking world." 70
-    echo ""
-    
-    echo "INIT_COMPLETE|Name:$PLAYER_NAME|Class:$PLAYER_CLASS|HP:$HP|Stamina:$STAMINA|Insight:$INSIGHT"
+    while (( x >= 0 && y >= 0 && x < ${#MAP[0]} && y < ${#MAP[@]} )); do
+        local ch="${MAP[y]:x:1}"
+        if [[ $ch == "#" ]]; then
+            break
+        elif [[ $ch == "E" ]]; then
+            # Remove enemy
+            MAP[y]="${MAP[y]:0:x} ${MAP[y]:x+1}"
+            ((SCORE++))
+            break
+        fi
+        case $PLAYER_DIR in
+            up) ((y--));;
+            down) ((y++));;
+            left) ((x--));;
+            right) ((x++));;
+        esac
+    done
 }
-
+game_loop() {
+    while true; do
+        update_map
+        draw_frame MAP
+        echo -e "Score: $SCORE"
+        # Read single key without echo
+        IFS= read -rsn1 -t 0.2 key
+        case $key in
+            w) move_player up ;;
+            s) move_player down ;;
+            a) move_player left ;;
+            d) move_player right ;;
+            f) fire ;;
+            q) echo "Quitting..."; break ;;
+        esac
+    done
+}
+step1() {
+    setup_terminal
+    # Ask user if they want to start the FPS demo
+    if gum confirm "Start the simple Bash FPS demo?" ; then
+        init_map
+        game_loop
+    else
+        echo "Demo aborted by user."
+    fi
+}
 step1
 
 # ───────────────────────────────────────────────────────────────
 # OUTPUT FROM PREVIOUS STEP:
 # ───────────────────────────────────────────────────────────────
-# Script started on 2026-01-31 10:54:46+11:00 [COMMAND="bash '/tmp/tmp.qz1p86GCcn'" TERM="xterm-256color" TTY="/dev/pts/0" COLUMNS="126" LINES="57"]
+# Script started on 2026-01-31 11:54:17+11:00 [COMMAND="bash '/tmp/tmp.SnRKosdP6W'" TERM="xterm-256color" TTY="/dev/pts/4" COLUMNS="126" LINES="76"]
+# [?25l]11;?\[6n[?25l[?2004h Start the simple Bash FPS demo?       
+#                                        
+#     Yes        No                      
+#                                        
+# ←→ toggle • enter submit • y Yes • n No[126D[4A
 # 
-# __   ___  _   _   ___ _  _   _   __  __ 
-# \ \ / / || | /_\ | _ \ \| | /_\ |  \/  |
-#  \ V /| __ |/ _ \|   / .` |/ _ \| |\/| |
-#   |_| |_||_/_/ \_\_|_\_|\_/_/ \_\_|  |_|
-#                                         
+#     Yes        No                      
 # 
-# The city of Yharnam, known for its medical remedies and the mysterious Healing Church...
-# Tonight, the hunt begins anew.
+# [126D[4A
 # 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# A figure in the mist approaches you...
+#     Yes        No                      
 # 
-# "Ah, you must be the new hunter. Tell me, what name shall I inscribe in the records?"
+# [126D[4A [126D[?2004l[?25h[?1002l[?1003l[?1006l####################
+# #@      #         E#
+# #   ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
 # 
-# [?25l[?2004h[?1004hName: Enter your hunter's name                                                                                                
-#                                                                                                                               
-# enter submit                                                                                                                  [126D[2AName: Enter your hunter's name                                                                                                
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #   ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
 # 
-# [126D[2AName: Enter your hunter's name                                                                                                
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #   ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
 # 
-# [126D[2AName: Enter your hunter's name                                                                                                
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #   ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
 # 
-# [126D[2AName: Enter your hunter's name                                                                                                
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #   ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
 # 
-# [126D[2AName: Enter your hunter's name                                                                                                
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #   ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
 # 
-# [126D[2AName: d                                                                                                                       
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #   ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
 # 
-# [126D[2AName: da                                                                                                                      
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #   ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
 # 
-# [126D[2AName: dav                                                                                                                     
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #   ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
 # 
-# [126D[2AName: davi                                                                                                                    
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #   ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
 # 
-# [126D[2AName: david                                                                                                                   
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #   ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
 # 
-# [126D[2A [126D[?2004l[?25h[?1002l[?1003l[?1006l[?1004l
-# "david... I see. And your discipline?"
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #   ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
 # 
-# [?25l[?2004hChoose your origin:                                         
-# > ⚔️  Hunter - Balanced fighter (HP: 100, Stamina: 100)     
-#   🗡️  Skill Hunter - Swift and deadly (HP: 85, Stamina: 120)
-#   🛡️  Fortitude Hunter - Tank (HP: 130, Stamina: 80)        
-#   🔮 Insight Hunter - Arcane mastery (HP: 90, Insight: 5)   
-#                                                             
-# ←↓↑→ navigate • enter submit                                [126D[7A [126D[?2004l[?25h[?1002l[?1003l[?1006l
-#    ___      ___   _  _____ _  _ ___ _  _  ___ 
-#   /_\ \    / /_\ | |/ / __| \| |_ _| \| |/ __|
-#  / _ \ \/\/ / _ \| ' <| _|| .` || || .` | (_ |
-# /_/ \_\_/\_/_/ \_\_|\_\___|_|\_|___|_|\_|\___|
-#                                               
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #   ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
 # 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 📍 Location: Hunter's Dream
-# ❤️  HP: 100/100 | ⚡ Stamina: 100/100 | 👁️  Insight: 0 | 🩸 Blood Echoes: 0
-# 🎒 Inventory: Saw Cleaver Hunter Pistol 3x Blood Vials
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #   ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
 # 
-# "david, the Hunter... The night beckons."
-# "You awaken in the Hunter's Dream, a refuge between hunts."
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #   ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
 # 
-# Before you stands a weathered workshop, gaslit lanterns casting dancing shadows on brass mechanisms.
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #   ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
 # 
-# To your left, a series of gravestones serve as gateways to the waking world.
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #   ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
 # 
-# INIT_COMPLETE|Name:david|Class:Hunter|HP:100|Stamina:100|Insight:0
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #   ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
 # 
-# Script done on 2026-01-31 10:55:15+11:00 [COMMAND_EXIT_CODE="0"]
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #   ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #   ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #   ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@  ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #   ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@  ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@ ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@ ##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #        ####       #
+# #   E                #
+# #        ##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+#
+# [...1205 lines snipped...]
+#
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #  @  @@@####       #
+# #  @@@@ @@           #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #  @  @@@####       #
+# #  @@@@ @@           #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #  @  @@@####       #
+# #  @@@@ @@           #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #  @  @@@####       #
+# #  @@@@ @@           #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #  @  @@@####       #
+# #  @@@@ @@           #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #  @  @@@####       #
+# #  @@@@ @@@          #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #  @  @@@####       #
+# #  @@@@ @@@@         #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #  @  @@@####       #
+# #  @@@@ @@@@         #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #  @  @@@####       #
+# #  @@@@ @@@@@        #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #  @  @@@####       #
+# #  @@@@ @@@@@@       #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #  @  @@@####       #
+# #  @@@@ @@@@@@       #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #  @  @@@####       #
+# #  @@@@ @@@@@@       #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #  @  @@@####       #
+# #  @@@@ @@@@@@@      #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #  @  @@@####       #
+# #  @@@@ @@@@@@@      #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #  @  @@@####       #
+# #  @@@@ @@@@@@@      #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #  @  @@@####       #
+# #  @@@@ @@@@@@@@     #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #  @  @@@####       #
+# #  @@@@ @@@@@@@@     #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #  @  @@@####  @    #
+# #  @@@@ @@@@@@@@     #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #  @  @@@####  @    #
+# #  @@@@ @@@@@@@@     #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #  @  @@@####  @    #
+# #  @@@@ @@@@@@@@     #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #  @  @@@####  @    #
+# #  @@@@ @@@@@@@@     #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #  @  @@@####  @    #
+# #  @@@@ @@@@@@@@     #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ##   E  #
+# #  @  @@@####  @    #
+# #  @@@@ @@@@@@@@     #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ## @ E  #
+# #  @  @@@####  @    #
+# #  @@@@ @@@@@@@@     #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ## @ E  #
+# #  @  @@@####  @    #
+# #  @@@@ @@@@@@@@     #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ## @ E  #
+# #  @  @@@####  @    #
+# #  @@@@ @@@@@@@@     #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ## @ E  #
+# #  @  @@@####  @    #
+# #  @@@@ @@@@@@@@     #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ## @ E  #
+# #  @  @@@####  @    #
+# #  @@@@ @@@@@@@@     #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ## @ E  #
+# #  @  @@@####  @    #
+# #  @@@@ @@@@@@@@     #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# ####################
+# #@      #         E#
+# #@@ ##  #   ##      #
+# #@@@##  #   ## @ E  #
+# #  @  @@@####  @    #
+# #  @@@@ @@@@@@@@     #
+# #    @@@@##         #
+# #   ##        ##    #
+# #          E        #
+# ####################
+# 
+# Controls: w/a/s/d = move, f = fire, q = quit
+# Score: 0
+# Quitting...
+# [?12l[?25h
+# Script done on 2026-01-31 11:54:44+11:00 [COMMAND_EXIT_CODE="0"]
 
 # ═══════════════════════════════════════════════════════════════
-# STEP 2: Continue adventure - explore Hunter's Dream
-# Generated: 2026-01-31 10:55:34 | FINAL: false
+# STEP 2: Complete simple Bash FPS game with movement, shooting, enemies, health, and score
+# Generated: 2026-01-31 11:54:50 | FINAL: true
 # ═══════════════════════════════════════════════════════════════
-# Core game state (persists across steps)
-PLAYER_NAME="david"
-PLAYER_CLASS="Hunter"
-HP=100
-MAX_HP=100
-STAMINA=100
-MAX_STAMINA=100
-INSIGHT=0
-BLOOD_ECHOES=0
-INVENTORY=("Saw Cleaver" "Hunter Pistol" "3x Blood Vials")
-LOCATION="Hunter's Dream"
-GAME_STATE="exploring_dream"
+#!/usr/bin/env bash
+# Simple Bash FPS
+# Global state
+MAP_WIDTH=30
+MAP_HEIGHT=12
+PLAYER_CHAR='@'
+ENEMY_CHAR='E'
+WALL_CHAR='#'
+EMPTY_CHAR=' '
+BULLET_CHAR='*'
+PLAYER_X=2
+PLAYER_Y=2
+PLAYER_HP=5
+SCORE=0
+ENEMIES=()   # array of "x y"
+BULLETS=()   # array of "x y dx dy"
+WALLS=()     # array of "x y"
 
-# UI Helper Functions
-show_status_bar() {
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "📍 Location: $LOCATION"
-    echo "❤️  HP: $HP/$MAX_HP | ⚡ Stamina: $STAMINA/$MAX_STAMINA | 👁️  Insight: $INSIGHT | 🩸 Blood Echoes: $BLOOD_ECHOES"
-    echo "🎒 Inventory: ${INVENTORY[*]}"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo
+# Initialize map walls (border + some obstacles)
+init_walls() {
+  for ((x=0;x<MAP_WIDTH;x++)); do
+    WALLS+=("$x 0")
+    WALLS+=("$x $((MAP_HEIGHT-1))")
+  done
+  for ((y=0;y<MAP_HEIGHT;y++)); do
+    WALLS+=("0 $y")
+    WALLS+=("$((MAP_WIDTH-1)) $y")
+  done
+  # Add some interior walls
+  for ((x=5;x<25;x++)); do
+    WALLS+=("$x 5")
+  done
+  for ((y=2;y<9;y++)); do
+    WALLS+=("15 $y")
+  done
 }
 
-slow_text() {
-    echo "$1" | pv -qL 50
+# Place enemies at random empty spots
+spawn_enemies() {
+  ENEMIES=()
+  for i in {1..5}; do
+    while :; do
+      ex=$((RANDOM % (MAP_WIDTH-2) + 1))
+      ey=$((RANDOM % (MAP_HEIGHT-2) + 1))
+      if ! is_wall "$ex" "$ey" && ! is_player "$ex" "$ey"; then
+        ENEMIES+=("$ex $ey")
+        break
+      fi
+    done
+  done
 }
 
-dramatic_pause() {
-    sleep "${1:-1}"
+# Helper checks
+is_wall() {
+  local x=$1 y=$2
+  for w in "${WALLS[@]}"; do
+    read wx wy <<<"$w"
+    ((wx==x && wy==y)) && return 0
+  done
+  return 1
+}
+is_player() {
+  ((x==PLAYER_X && y==PLAYER_Y))
+}
+is_enemy_at() {
+  local x=$1 y=$2
+  for e in "${ENEMIES[@]}"; do
+    read ex ey <<<"$e"
+    ((ex==x && ey==y)) && return 0
+  done
+  return 1
+}
+remove_enemy_at() {
+  local x=$1 y=$2
+  local new=()
+  for e in "${ENEMIES[@]}"; do
+    read ex ey <<<"$e"
+    if ((ex!=x || ey!=y)); then
+      new+=("$ex $ey")
+    fi
+  done
+  ENEMIES=("${new[@]}")
+}
+remove_bullet_at() {
+  local x=$1 y=$2
+  local new=()
+  for b in "${BULLETS[@]}"; do
+    read bx by dx dy <<<"$b"
+    if ((bx!=x || by!=y)); then
+      new+=("$bx $by $dx $dy")
+    fi
+  done
+  BULLETS=("${new[@]}")
 }
 
-step2() {
-    echo
-    show_status_bar
-    
-    slow_text "The workshop stands before you, filled with strange tools and mechanisms."
-    dramatic_pause 0.5
-    slow_text "Gears turn endlessly in the corners, powered by some unseen force."
-    dramatic_pause 0.5
-    echo
-    
-    slow_text "A figure emerges from the shadows - a hunched, pale doll in Victorian dress."
-    dramatic_pause 1
-    echo
-    echo "💀 The Doll speaks:"
-    dramatic_pause 0.5
-    slow_text '"Welcome, good hunter. Should you need guidance, I am here to assist."'
-    dramatic_pause 1
-    echo
-    echo
-    
-    # Present meaningful choices
-    ACTION=$(gum choose \
-        "🔍 Examine the workshop" \
-        "💬 Speak with the Doll" \
-        "⚔️  Practice combat techniques" \
-        "🪦 Approach the gravestones (Enter Yharnam)" \
-        "📦 Check inventory" \
-        --header "What will you do?" \
-        --cursor.foreground="196" \
-        --selected.foreground="226")
-    
-    echo
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "🎯 CHOICE: $ACTION"
-    
-    case "$ACTION" in
-        *workshop*)
-            echo "STATE: examining_workshop"
-            ;;
-        *Doll*)
-            echo "STATE: talking_to_doll"
-            ;;
-        *combat*)
-            echo "STATE: combat_training"
-            ;;
-        *gravestones*)
-            echo "STATE: entering_yharnam"
-            ;;
-        *inventory*)
-            echo "STATE: checking_inventory"
-            ;;
+# Draw the whole screen
+draw_screen() {
+  tput civis
+  tput clear
+  for ((y=0;y<MAP_HEIGHT;y++)); do
+    line=""
+    for ((x=0;x<MAP_WIDTH;x++)); do
+      char=$EMPTY_CHAR
+      if is_wall "$x" "$y"; then
+        char=$WALL_CHAR
+      elif ((x==PLAYER_X && y==PLAYER_Y)); then
+        char=$PLAYER_CHAR
+      else
+        for e in "${ENEMIES[@]}"; do
+          read ex ey <<<"$e"
+          if ((ex==x && ey==y)); then char=$ENEMY_CHAR; break; fi
+        done
+        for b in "${BULLETS[@]}"; do
+          read bx by dx dy <<<"$b"
+          if ((bx==x && by==y)); then char=$BULLET_CHAR; break; fi
+        done
+      fi
+      line+="$char"
+    done
+    echo "$line"
+  done
+  echo "HP: $PLAYER_HP   Score: $SCORE   Enemies: ${#ENEMIES[@]}"
+  tput cnorm
+}
+
+# Move player if possible
+move_player() {
+  local dir=$1
+  local nx=$PLAYER_X ny=$PLAYER_Y
+  case $dir in
+    w) ((ny--)) ;;
+    s) ((ny++)) ;;
+    a) ((nx--)) ;;
+    d) ((nx++)) ;;
+  esac
+  if ! is_wall "$nx" "$ny" && ! is_enemy_at "$nx" "$ny"; then
+    PLAYER_X=$nx PLAYER_Y=$ny
+  fi
+}
+
+# Fire a bullet in the direction player last moved (default up)
+fire_bullet() {
+  local dir=$1
+  local dx=0 dy=0
+  case $dir in
+    w) dy=-1 ;;
+    s) dy=1 ;;
+    a) dx=-1 ;;
+    d) dx=1 ;;
+    *) dy=-1 ;; # default up
+  esac
+  # start bullet adjacent to player
+  local bx=$((PLAYER_X+dx))
+  local by=$((PLAYER_Y+dy))
+  if ! is_wall "$bx" "$by"; then
+    BULLETS+=("$bx $by $dx $dy")
+  fi
+}
+
+# Advance bullets, handle collisions
+update_bullets() {
+  local new=()
+  for b in "${BULLETS[@]}"; do
+    read bx by dx dy <<<"$b"
+    local nx=$((bx+dx)) ny=$((by+dy))
+    if is_wall "$nx" "$ny"; then
+      continue
+    elif is_enemy_at "$nx" "$ny"; then
+      remove_enemy_at "$nx" "$ny"
+      ((SCORE++))
+      continue
+    else
+      new+=("$nx $ny $dx $dy")
+    fi
+  done
+  BULLETS=("${new[@]}")
+}
+
+# Simple enemy AI: move towards player if not blocked
+update_enemies() {
+  local new=()
+  for e in "${ENEMIES[@]}"; do
+    read ex ey <<<"$e"
+    local dx=$((PLAYER_X-ex))
+    local dy=$((PLAYER_Y-ey))
+    # Normalize to -1,0,1
+    ((dx>0)) && dx=1 || ((dx<0)) && dx=-1 || dx=0
+    ((dy>0)) && dy=1 || ((dy<0)) && dy=-1 || dy=0
+    local nx=$((ex+dx)) ny=$((ey+dy))
+    if ((nx==PLAYER_X && ny==PLAYER_Y)); then
+      ((PLAYER_HP--))
+      # enemy stays in place after hit
+      new+=("$ex $ey")
+    elif ! is_wall "$nx" "$ny" && ! is_enemy_at "$nx" "$ny" && ! is_player "$nx" "$ny"; then
+      new+=("$nx $ny")
+    else
+      new+=("$ex $ey")
+    fi
+  done
+  ENEMIES=("${new[@]}")
+}
+
+# Main game loop
+game_loop() {
+  local last_dir='w'
+  while (( PLAYER_HP > 0 )); do
+    draw_screen
+    # Non-blocking read with timeout for smoother loop
+    read -rsn1 -t 0.2 key
+    case $key in
+      w|a|s|d) move_player "$key"; last_dir=$key ;;
+      f| ) fire_bullet "$last_dir" ;;
+      q) echo "Quitting..."; break ;;
     esac
-    
-    echo "STEP_COMPLETE|HP:$HP|Stamina:$STAMINA|Insight:$INSIGHT|Echoes:$BLOOD_ECHOES"
+    update_bullets
+    update_enemies
+    # Respawn enemies if all dead
+    (( ${#ENEMIES[@]} == 0 )) && spawn_enemies
+  done
+  tput clear
+  echo "Game Over! Final Score: $SCORE"
 }
 
-step2
+# Initialize everything
+init_walls
+spawn_enemies
+draw_screen
+echo "Press any key to start..."
+read -rsn1
+game_loop
+
+# End of script
+
+# No need to call step2; script runs on execution.
 
 # ───────────────────────────────────────────────────────────────
 # OUTPUT FROM PREVIOUS STEP:
 # ───────────────────────────────────────────────────────────────
-# Script started on 2026-01-31 10:55:34+11:00 [COMMAND="bash '/tmp/tmp.rP5Kk13Xjj'" TERM="xterm-256color" TTY="/dev/pts/0" COLUMNS="126" LINES="57"]
+# Script started on 2026-01-31 11:54:50+11:00 [COMMAND="bash '/tmp/tmp.bswzaArk7b'" TERM="xterm-256color" TTY="/dev/pts/4" COLUMNS="126" LINES="76"]
+# /tmp/tmp.bswzaArk7b: line 212: syntax error near unexpected token `)'
+# /tmp/tmp.bswzaArk7b: line 212: `      f| ) fire_bullet "$last_dir" ;;'
 # 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 📍 Location: Hunter's Dream
-# ❤️  HP: 100/100 | ⚡ Stamina: 100/100 | 👁️  Insight: 0 | 🩸 Blood Echoes: 0
-# 🎒 Inventory: Saw Cleaver Hunter Pistol 3x Blood Vials
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 
-# The workshop stands before you, filled with strange tools and mechanisms.
-# Gears turn endlessly in the corners, powered by some unseen force.
-# 
-# A figure emerges from the shadows - a hunched, pale doll in Victorian dress.
-# 
-# 💀 The Doll speaks:
-# "Welcome, good hunter. Should you need guidance, I am here to assist."
-# 
-# [?25l[?2004hWhat will you do?                            
-# > 🔍 Examine the workshop                    
-#   💬 Speak with the Doll                     
-#   ⚔️  Practice combat techniques             
-#   🪦 Approach the gravestones (Enter Yharnam)
-#   📦 Check inventory                         
-#                                              
-# ←↓↑→ navigate • enter submit                 [126D[8A
-#   🔍 Examine the workshop                    
-# > 💬 Speak with the Doll                     
-# 
-# [126D[8A [126D[?2004l[?25h[?1002l[?1003l[?1006l
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🎯 CHOICE: 💬 Speak with the Doll
-# STATE: talking_to_doll
-# STEP_COMPLETE|HP:100|Stamina:100|Insight:0|Echoes:0
-# 
-# Script done on 2026-01-31 10:55:50+11:00 [COMMAND_EXIT_CODE="0"]
+# Script done on 2026-01-31 11:54:50+11:00 [COMMAND_EXIT_CODE="2"]
 
 # ═══════════════════════════════════════════════════════════════
-# STEP 3: Doll dialogue and quest introduction
-# Generated: 2026-01-31 10:56:13 | FINAL: false
+# STEP 3: Show the contents of the script that caused the syntax error so we can locate and fix the malformed case pattern
+# Generated: 2026-01-31 11:54:51 | FINAL: false
 # ═══════════════════════════════════════════════════════════════
 step3() {
-    clear
-    
-    # Beautiful header with doll speaking
-    gum style --border double --padding "1 2" --border-foreground 212 --foreground 255 \
-        "🌙 The Doll's Counsel 🌙"
-    echo
-    
-    # Slow reveal of dialogue
-    echo "The Doll tilts her porcelain head, joints clicking softly..." | pv -qL 40
-    sleep 0.5
-    echo
-    
-    gum style --foreground 212 --italic \
-        '"Good hunter, the night is long and the beasts are many."' | pv -qL 35
-    sleep 0.8
-    echo
-    
-    gum style --foreground 212 --italic \
-        '"You have awakened in the Hunter'"'"'s Dream, bound to this place by the contract."' | pv -qL 35
-    sleep 0.8
-    echo
-    
-    gum style --foreground 212 --italic \
-        '"Beyond the gravestones lies Yharnam - a city consumed by the scourge."' | pv -qL 35
-    sleep 0.8
-    echo
-    
-    gum style --foreground 212 --italic \
-        '"Seek paleblood to transcend the hunt. But beware... insight reveals truths"' | pv -qL 35
-    sleep 0.3
-    gum style --foreground 212 --italic \
-        '"that may shatter the mind."' | pv -qL 35
-    sleep 1
-    echo
-    echo
-    
-    # Quest gained notification
-    gum style --border rounded --padding "0 2" --border-foreground 226 --foreground 226 --bold \
-        "📜 QUEST RECEIVED: Seek Paleblood"
-    echo
-    gum style --foreground 244 --italic \
-        "   Venture into Yharnam and uncover the secret of paleblood."
-    sleep 1.5
-    echo
-    echo
-    
-    # Additional lore hint with dramatic pause
-    echo "She gestures toward a workbench lined with brass instruments and glass vials..." | pv -qL 40
-    sleep 0.5
-    echo
-    
-    gum style --foreground 212 --italic \
-        '"The workshop contains knowledge. Should you find Blood Gems or runes,"' | pv -qL 35
-    sleep 0.3
-    gum style --foreground 212 --italic \
-        '"I can help fortify your armaments."' | pv -qL 35
-    sleep 1
-    echo
-    echo
-    
-    # Stats reminder with new quest
-    gum style --border normal --padding "0 1" --border-foreground 240 \
-        "❤️  HP: 100/100 | ⚡ Stamina: 100/100 | 👁️  Insight: 0 | 🩸 Blood Echoes: 0" \
-        "🎒 Inventory: Saw Cleaver, Hunter Pistol, 3x Blood Vials" \
-        "📜 Active Quest: Seek Paleblood"
-    echo
-    echo
-    
-    # Return to hub choice
-    CHOICE=$(gum choose \
-        "💬 Ask about paleblood" \
-        "🔧 Ask about weapon upgrades" \
-        "🌫️  Ask about insight" \
-        "↩️  Return to workshop hub" \
-        "🪦 Enter Yharnam through the gravestones")
-    
-    echo
-    gum style --border rounded --padding "0 1" --border-foreground 39 \
-        "🎯 CHOICE: $CHOICE"
-    
-    # Output state for next iteration
-    echo "STATE: doll_conversation"
-    echo "QUEST: seek_paleblood_active"
-    echo "STEP_COMPLETE|HP:100|Stamina:100|Insight:0|Echoes:0|Choice:$CHOICE"
+    script_path="/tmp/tmp.bswzaArk7b"
+    if [[ -f "$script_path" ]]; then
+        echo "=== BEGIN $script_path ==="
+        cat "$script_path"
+        echo "=== END $script_path ==="
+    else
+        echo "Script file not found at $script_path"
+    fi
 }
 step3
 
 # ───────────────────────────────────────────────────────────────
 # OUTPUT FROM PREVIOUS STEP:
 # ───────────────────────────────────────────────────────────────
-# Script started on 2026-01-31 10:56:13+11:00 [COMMAND="bash '/tmp/tmp.1JkVaoenP4'" TERM="xterm-256color" TTY="/dev/pts/0" COLUMNS="126" LINES="57"]
-# ]11;?\[6n╔════════════════════════════╗
-# ║                            ║
-# ║  🌙 The Doll's Counsel 🌙  ║
-# ║                            ║
-# ╚════════════════════════════╝
+# Script started on 2026-01-31 11:54:51+11:00 [COMMAND="bash '/tmp/tmp.w6CuSYzf81'" TERM="xterm-256color" TTY="/dev/pts/4" COLUMNS="126" LINES="76"]
+# Script file not found at /tmp/tmp.bswzaArk7b
 # 
-# The Doll tilts her porcelain head, joints clicking softly...
-# 
-# "Good hunter, the night is long and the beasts are many."
-# 
-# "You have awakened in the Hunter's Dream, bound to this place by the contract."
-# 
-# "Beyond the gravestones lies Yharnam - a city consumed by the scourge."
-# 
-# "Seek paleblood to transcend the hunt. But beware... insight reveals truths"
-# "that may shatter the mind."
-# 
-# ]11;?\[6n╭─────────────────────────────────────╮
-# │  📜 QUEST RECEIVED: Seek Paleblood  │
-# ╰─────────────────────────────────────╯
-# 
-# ]11;?\[6n   Venture into Yharnam and uncover the secret of paleblood.
-# 
-# She gestures toward a workbench lined with brass instruments and glass vials...
-# 
-# "The workshop contains knowledge. Should you find Blood Gems or runes,"
-# "I can help fortify your armaments."
-# 
-# ]11;?\[6n┌─────────────────────────────────────────────────────────────────────────────┐
-# │ ❤️  HP: 100/100 | ⚡ Stamina: 100/100 | 👁️  Insight: 0 | 🩸 Blood Echoes: 0 │
-# │ 🎒 Inventory: Saw Cleaver, Hunter Pistol, 3x Blood Vials                    │
-# │ 📜 Active Quest: Seek Paleblood                                             │
-# └─────────────────────────────────────────────────────────────────────────────┘
-# 
-# [?25l[?2004hChoose:                                   
-# > 💬 Ask about paleblood                  
-#   🔧 Ask about weapon upgrades            
-#   🌫️  Ask about insight                   
-#   ↩️  Return to workshop hub              
-#   🪦 Enter Yharnam through the gravestones
-#                                           
-# ←↓↑→ navigate • enter submit              [126D[8A
-#   💬 Ask about paleblood                  
-# > 🔧 Ask about weapon upgrades            
-# 
-# [126D[8A
-# > 💬 Ask about paleblood                  
-#   🔧 Ask about weapon upgrades            
-# 
-# [126D[8A [126D[?2004l[?25h[?1002l[?1003l[?1006l
-# ]11;?\[6n╭───────────────────────────────────╮
-# │ 🎯 CHOICE: 💬 Ask about paleblood │
-# ╰───────────────────────────────────╯
-# STATE: doll_conversation
-# QUEST: seek_paleblood_active
-# STEP_COMPLETE|HP:100|Stamina:100|Insight:0|Echoes:0|Choice:💬 Ask about paleblood
-# 
-# Script done on 2026-01-31 10:56:51+11:00 [COMMAND_EXIT_CODE="0"]
+# Script done on 2026-01-31 11:54:51+11:00 [COMMAND_EXIT_CODE="0"]
 
 # ═══════════════════════════════════════════════════════════════
-# STEP 4: The Doll reveals knowledge of paleblood
-# Generated: 2026-01-31 10:57:22 | FINAL: false
+# STEP 4: Initialize and run a simple text‑based FPS loop in bash (player can turn, move, and shoot enemies on a small grid)
+# Generated: 2026-01-31 11:54:54 | FINAL: false
 # ═══════════════════════════════════════════════════════════════
-#!/bin/bash
+# Global helpers -------------------------------------------------
+clear_screen() { printf "\033[H\033[2J"; }
+hide_cursor() { printf "\033[?25l"; }
+show_cursor() { printf "\033[?25h"; }
+# --------------------------------------------------------------
 
-# Global state variables (persist across steps)
-HP=100
-MAX_HP=100
-STAMINA=100
-MAX_STAMINA=100
-INSIGHT=0
-BLOOD_ECHOES=0
-QUEST_STAGE="paleblood_revealed"
+# Game state ----------------------------------------------------
+MAP_WIDTH=15
+MAP_HEIGHT=9
+# Simple open map with walls (#) around edges
+declare -A MAP
+for ((y=0; y<MAP_HEIGHT; y++)); do
+    for ((x=0; x<MAP_WIDTH; x++)); do
+        if (( x==0 || y==0 || x==MAP_WIDTH-1 || y==MAP_HEIGHT-1 )); then
+            MAP[$x,$y]='#'   # wall
+        else
+            MAP[$x,$y]=' '   # empty space
+        fi
+    done
+done
 
-# Display utilities
-show_border() {
-    local width=80
-    printf '╔'
-    printf '═%.0s' $(seq 1 $((width-2)))
-    printf '╗\n'
+# Player state
+PX=7; PY=5            # start near centre
+PDIR=0               # 0=N,1=E,2=S,3=W
+# Enemies (list of x,y)
+ENEMIES=()
+ENEMIES+=("3,3")
+ENEMIES+=("11,2")
+ENEMIES+=("12,7")
+# --------------------------------------------------------------
+
+# Utility --------------------------------------------------------
+direction_name() {
+    case $1 in
+        0) echo "N";;
+        1) echo "E";;
+        2) echo "S";;
+        3) echo "W";;
+    esac
 }
+# --------------------------------------------------------------
 
-show_border_bottom() {
-    local width=80
-    printf '╚'
-    printf '═%.0s' $(seq 1 $((width-2)))
-    printf '╝\n'
+# Rendering ------------------------------------------------------
+draw_map() {
+    clear_screen
+    for ((y=0; y<MAP_HEIGHT; y++)); do
+        for ((x=0; x<MAP_WIDTH; x++)); do
+            if (( x==PX && y==PY )); then
+                # player arrow based on direction
+                case $PDIR in
+                    0) printf "^";;
+                    1) printf ">";;
+                    2) printf "v";;
+                    3) printf "<";;
+                esac
+            else
+                # check enemy
+                local found=0
+                for e in "${ENEMIES[@]}"; do
+                    IFS=',' read -r ex ey <<<"$e"
+                    if (( ex==x && ey==y )); then
+                        printf "E"
+                        found=1
+                        break
+                    fi
+                done
+                ((found)) || printf "${MAP[$x,$y]}"
+            fi
+        done
+        printf "\n"
+    done
+    printf "\nUse arrow keys to move/turn, SPACE to shoot, Q to quit.\n"
+    printf "Facing: %s  Enemies left: %d\n" "$(direction_name $PDIR)" "${#ENEMIES[@]}"
 }
+# --------------------------------------------------------------
 
-slow_echo() {
-    echo "$1" | pv -qL 60
+# Game logic -----------------------------------------------------
+move_forward() {
+    local nx=$PX ny=$PY
+    case $PDIR in
+        0) ((ny--));;
+        1) ((nx++));;
+        2) ((ny++));;
+        3) ((nx--));;
+    esac
+    # collision with walls
+    if [[ "${MAP[$nx,$ny]}" != "#" ]]; then
+        PX=$nx; PY=$ny
+    fi
 }
-
-show_stats() {
-    echo ""
-    printf '┌─────────────────────────────────────────────────────────────────────────────┐\n'
-    printf '│ ❤️  HP: %d/%d | ⚡ Stamina: %d/%d | 👁️  Insight: %d | 🩸 Blood Echoes: %d   │\n' \
-        "$HP" "$MAX_HP" "$STAMINA" "$MAX_STAMINA" "$INSIGHT" "$BLOOD_ECHOES"
-    printf '│ 🎒 Inventory: Saw Cleaver, Hunter Pistol, 3x Blood Vials                    │\n'
-    printf '│ 📜 Active Quest: Seek Paleblood (Stage: Research)                           │\n'
-    printf '└─────────────────────────────────────────────────────────────────────────────┘\n'
-    echo ""
+move_backward() {
+    local nx=$PX ny=$PY
+    case $PDIR in
+        0) ((ny++));;
+        1) ((nx--));;
+        2) ((ny--));;
+        3) ((nx++));;
+    esac
+    if [[ "${MAP[$nx,$ny]}" != "#" ]]; then
+        PX=$nx; PY=$ny
+    fi
 }
+turn_left() { ((PDIR=(PDIR+3)%4)); }
+turn_right() { ((PDIR=(PDIR+1)%4)); }
 
+shoot() {
+    # Raycast in facing direction until wall or max range 10
+    local sx=$PX sy=$PY
+    for ((step=1; step<=10; step++)); do
+        case $PDIR in
+            0) ((sy--));;
+            1) ((sx++));;
+            2) ((sy++));;
+            3) ((sx--));;
+        esac
+        # stop at wall
+        if [[ "${MAP[$sx,$sy]}" == "#" ]]; then
+            break
+        fi
+        # check enemy
+        local i=0
+        for e in "${ENEMIES[@]}"; do
+            IFS=',' read -r ex ey <<<"$e"
+            if (( ex==sx && ey==sy )); then
+                # remove enemy
+                unset 'ENEMIES[i]'
+                ENEMIES=("${ENEMIES[@]}")   # reindex
+                printf "\a"   # beep
+                break 2
+            fi
+            ((i++))
+        done
+    done
+}
+# --------------------------------------------------------------
+
+# Input handling -------------------------------------------------
+read_key() {
+    # read one key, handling escape sequences for arrows
+    IFS= read -rsn1 -t 0.1 key || return 1
+    if [[ $key == $'\e' ]]; then
+        IFS= read -rsn2 -t 0.01 rest
+        key+=$rest
+    fi
+    echo "$key"
+}
+# --------------------------------------------------------------
+
+# Main loop ------------------------------------------------------
 step4() {
-    # The Doll's response about paleblood - cryptic and atmospheric
-    sleep 0.3
-    
-    show_border
-    echo "║                    🌙 The Doll's Whispers 🌙                     ║"
-    show_border_bottom
-    echo ""
-    
-    slow_echo "The Doll's glassy eyes seem to gaze past you, into distant dreams..."
-    echo ""
-    sleep 0.5
-    
-    slow_echo '"Paleblood... ah, yes. The enigma that beckons the curious."'
-    sleep 0.4
-    echo ""
-    
-    slow_echo '"It is spoken of in hushed tones within the Healing Church."'
-    slow_echo '"Some say it is a type of blood, rare and transcendent."'
-    slow_echo '"Others believe it to be a being, a Great One dwelling beyond mortal ken."'
-    echo ""
-    sleep 0.5
-    
-    slow_echo '"The scholars of Byrgenwerth once sought it fervently..."'
-    slow_echo '"Master Willem whispered of it in his madness: '\''Line our brains with eyes.'\''"'
-    echo ""
-    sleep 0.5
-    
-    # Insight gain - learning forbidden knowledge
-    INSIGHT=$((INSIGHT + 1))
-    
-    printf '\n╭─────────────────────────────────────╮\n'
-    printf '│  👁️  INSIGHT GAINED: +1 (Now: %d)  │\n' "$INSIGHT"
-    printf '╰─────────────────────────────────────╯\n\n'
-    
-    sleep 0.5
-    
-    slow_echo '"With insight comes understanding... but also terror."'
-    slow_echo '"You may begin to perceive things hidden from lesser minds."'
-    echo ""
-    sleep 0.5
-    
-    slow_echo '"If you truly seek paleblood, you must venture into Yharnam'\''s depths."'
-    slow_echo '"The Healing Church Cathedral holds secrets in its upper echelons."'
-    slow_echo '"And the Forbidden Woods... dark paths lead to darker truths."'
-    echo ""
-    sleep 0.5
-    
-    # Quest update
-    printf '╭──────────────────────────────────────────────────────────────╮\n'
-    printf '│  📜 QUEST UPDATED: Seek Paleblood                            │\n'
-    printf '│     → Investigate the Healing Church Cathedral               │\n'
-    printf '│     → Explore the Forbidden Woods                            │\n'
-    printf '│     → Consult the archives of Byrgenwerth                    │\n'
-    printf '╰──────────────────────────────────────────────────────────────╯\n\n'
-    
-    sleep 0.5
-    
-    slow_echo 'The Doll clasps her delicate hands together...'
-    echo ""
-    slow_echo '"But first, you must survive the night. The beasts grow restless."'
-    
-    show_stats
-    
-    # Present next choices - the game truly begins
-    CHOICE=$(gum choose \
-        "🔧 Ask about weapon upgrades" \
-        "🌫️  Ask about insight and its effects" \
-        "📖 Ask about the Healing Church" \
-        "🌲 Ask about the Forbidden Woods" \
-        "↩️  Return to workshop hub" \
-        "🪦 Enter Yharnam through the gravestones (BEGIN HUNT)")
-    
-    echo ""
-    printf '╭──────────────────────────────────╮\n'
-    printf '│ 🎯 CHOICE: %-20s │\n' "$CHOICE"
-    printf '╰──────────────────────────────────╯\n'
-    
-    # Output state for next step
-    echo "STATE: doll_conversation_continued"
-    echo "QUEST: paleblood_stage_2"
-    echo "INSIGHT: $INSIGHT"
-    echo "STEP_COMPLETE|HP:$HP|Stamina:$STAMINA|Insight:$INSIGHT|Echoes:$BLOOD_ECHOES|Choice:$CHOICE"
+    hide_cursor
+    trap 'show_cursor; clear_screen; exit' INT TERM EXIT
+    draw_map
+    while true; do
+        key=$(read_key) || continue
+        case "$key" in
+            $'\e[A') move_forward;;      # Up arrow
+            $'\e[B') move_backward;;     # Down arrow
+            $'\e[D') turn_left;;         # Left arrow
+            $'\e[C') turn_right;;        # Right arrow
+            " ") shoot;;                 # Space
+            [qQ]) break;;                # Quit
+        esac
+        draw_map
+        # win condition
+        if (( ${#ENEMIES[@]} == 0 )); then
+            printf "\nAll enemies eliminated! You win!\n"
+            break
+        fi
+    done
+    show_cursor
+    printf "\nThanks for playing.\n"
 }
-
 step4
 
 # ───────────────────────────────────────────────────────────────
 # OUTPUT FROM PREVIOUS STEP:
 # ───────────────────────────────────────────────────────────────
-# Script started on 2026-01-31 10:57:22+11:00 [COMMAND="bash '/tmp/tmp.qj4xZq8g1o'" TERM="xterm-256color" TTY="/dev/pts/0" COLUMNS="126" LINES="57"]
-# ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║                    🌙 The Doll's Whispers 🌙                     ║
-# ╚══════════════════════════════════════════════════════════════════════════════╝
+# Script started on 2026-01-31 11:54:54+11:00 [COMMAND="bash '/tmp/tmp.PxW2WcFOYm'" TERM="xterm-256color" TTY="/dev/pts/4" COLUMNS="126" LINES="76"]
+# [?25l###############
+# #             #
+# #          E  #
+# #  E          #
+# #             #
+# #      ^      #
+# #             #
+# #           E #
+# ###############
 # 
-# The Doll's glassy eyes seem to gaze past you, into distant dreams...
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: N  Enemies left: 3
+# ###############
+# #             #
+# #          E  #
+# #  E          #
+# #             #
+# #      >      #
+# #             #
+# #           E #
+# ###############
 # 
-# "Paleblood... ah, yes. The enigma that beckons the curious."
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: E  Enemies left: 3
+# ###############
+# #             #
+# #          E  #
+# #  E          #
+# #             #
+# #      ^      #
+# #             #
+# #           E #
+# ###############
 # 
-# "It is spoken of in hushed tones within the Healing Church."
-# "Some say it is a type of blood, rare and transcendent."
-# "Others believe it to be a being, a Great One dwelling beyond mortal ken."
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: N  Enemies left: 3
+# ###############
+# #             #
+# #          E  #
+# #  E          #
+# #             #
+# #      ^      #
+# #             #
+# #           E #
+# ###############
 # 
-# "The scholars of Byrgenwerth once sought it fervently..."
-# "Master Willem whispered of it in his madness: 'Line our brains with eyes.'"
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: N  Enemies left: 3
+# ###############
+# #             #
+# #          E  #
+# #  E          #
+# #             #
+# #      <      #
+# #             #
+# #           E #
+# ###############
 # 
-# ╭─────────────────────────────────────╮
-# │  👁️  INSIGHT GAINED: +1 (Now: 1)  │
-# ╰─────────────────────────────────────╯
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: W  Enemies left: 3
+# ###############
+# #             #
+# #          E  #
+# #  E          #
+# #             #
+# #      v      #
+# #             #
+# #           E #
+# ###############
 # 
-# "With insight comes understanding... but also terror."
-# "You may begin to perceive things hidden from lesser minds."
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: S  Enemies left: 3
+# ###############
+# #             #
+# #          E  #
+# #  E          #
+# #             #
+# #      >      #
+# #             #
+# #           E #
+# ###############
 # 
-# "If you truly seek paleblood, you must venture into Yharnam's depths."
-# "The Healing Church Cathedral holds secrets in its upper echelons."
-# "And the Forbidden Woods... dark paths lead to darker truths."
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: E  Enemies left: 3
+# ###############
+# #             #
+# #          E  #
+# #  E          #
+# #             #
+# #      >      #
+# #             #
+# #           E #
+# ###############
 # 
-# ╭──────────────────────────────────────────────────────────────╮
-# │  📜 QUEST UPDATED: Seek Paleblood                            │
-# │     → Investigate the Healing Church Cathedral               │
-# │     → Explore the Forbidden Woods                            │
-# │     → Consult the archives of Byrgenwerth                    │
-# ╰──────────────────────────────────────────────────────────────╯
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: E  Enemies left: 3
+# ###############
+# #             #
+# #          E  #
+# #  E          #
+# #             #
+# #      >      #
+# #             #
+# #           E #
+# ###############
 # 
-# The Doll clasps her delicate hands together...
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: E  Enemies left: 3
+# ###############
+# #             #
+# #          E  #
+# #  E          #
+# #             #
+# #      v      #
+# #             #
+# #           E #
+# ###############
 # 
-# "But first, you must survive the night. The beasts grow restless."
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: S  Enemies left: 3
+# ###############
+# #             #
+# #          E  #
+# #  E          #
+# #             #
+# #      v      #
+# #             #
+# #           E #
+# ###############
 # 
-# ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ ❤️  HP: 100/100 | ⚡ Stamina: 100/100 | 👁️  Insight: 1 | 🩸 Blood Echoes: 0   │
-# │ 🎒 Inventory: Saw Cleaver, Hunter Pistol, 3x Blood Vials                    │
-# │ 📜 Active Quest: Seek Paleblood (Stage: Research)                           │
-# └─────────────────────────────────────────────────────────────────────────────┘
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: S  Enemies left: 3
+# ###############
+# #             #
+# #          E  #
+# #  E          #
+# #             #
+# #      <      #
+# #             #
+# #           E #
+# ###############
 # 
-# [?25l[?2004hChoose:                                                
-# > 🔧 Ask about weapon upgrades                         
-#   🌫️  Ask about insight and its effects                
-#   📖 Ask about the Healing Church                      
-#   🌲 Ask about the Forbidden Woods                     
-#   ↩️  Return to workshop hub                           
-#   🪦 Enter Yharnam through the gravestones (BEGIN HUNT)
-#                                                        
-# ←↓↑→ navigate • enter submit                           [126D[9A
-#   🔧 Ask about weapon upgrades                         
-# > 🌫️  Ask about insight and its effects                
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: W  Enemies left: 3
+# ###############
+# #             #
+# #          E  #
+# #  E          #
+# #             #
+# #     <       #
+# #             #
+# #           E #
+# ###############
 # 
-# [126D[9A
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: W  Enemies left: 3
+# ###############
+# #             #
+# #          E  #
+# #  E          #
+# #             #
+# #    <        #
+# #             #
+# #           E #
+# ###############
 # 
-#   🌫️  Ask about insight and its effects                
-# > 📖 Ask about the Healing Church                      
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: W  Enemies left: 3
+# ###############
+# #             #
+# #          E  #
+# #  E          #
+# #             #
+# #   <         #
+# #             #
+# #           E #
+# ###############
 # 
-# [126D[9A [126D[?2004l[?25h[?1002l[?1003l[?1006l
-# ╭──────────────────────────────────╮
-# │ 🎯 CHOICE: 📖 Ask about the Healing Church │
-# ╰──────────────────────────────────╯
-# STATE: doll_conversation_continued
-# QUEST: paleblood_stage_2
-# INSIGHT: 1
-# STEP_COMPLETE|HP:100|Stamina:100|Insight:1|Echoes:0|Choice:📖 Ask about the Healing Church
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: W  Enemies left: 3
+# ###############
+# #             #
+# #          E  #
+# #  E          #
+# #             #
+# #  <          #
+# #             #
+# #           E #
+# ###############
 # 
-# Script done on 2026-01-31 10:59:21+11:00 [COMMAND_EXIT_CODE="0"]
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: W  Enemies left: 3
+# ###############
+# #             #
+# #          E  #
+# #  E          #
+# #             #
+# #  ^          #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: N  Enemies left: 3
+# ###############
+# #             #
+# #          E  #
+# #             #
+# #  ^          #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: N  Enemies left: 2
+# ###############
+# #             #
+# #          E  #
+# #             #
+# #  ^          #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: N  Enemies left: 2
+# ###############
+# #             #
+# #          E  #
+# #  ^          #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: N  Enemies left: 2
+# ###############
+# #             #
+# #  ^       E  #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: N  Enemies left: 2
+# ###############
+# #             #
+# #  >       E  #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: E  Enemies left: 2
+# ###############
+# #             #
+# #  >          #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: E  Enemies left: 1
+# ###############
+# #             #
+# #  v          #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: S  Enemies left: 1
+# ###############
+# #             #
+# #  <          #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: W  Enemies left: 1
+# ###############
+# #             #
+# #  ^          #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: N  Enemies left: 1
+# ###############
+# #             #
+# #  >          #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: E  Enemies left: 1
+# ###############
+# #             #
+# #  v          #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: S  Enemies left: 1
+# ###############
+# #             #
+# #  v          #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: S  Enemies left: 1
+# ###############
+# #             #
+# #  v          #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: S  Enemies left: 1
+# ###############
+# #             #
+# #  v          #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: S  Enemies left: 1
+# ###############
+# #             #
+# #  >          #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: E  Enemies left: 1
+# ###############
+# #             #
+# #  ^          #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: N  Enemies left: 1
+# ###############
+# #             #
+# #  ^          #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: N  Enemies left: 1
+# ###############
+# #             #
+# #  ^          #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: N  Enemies left: 1
+# ###############
+# #             #
+# #  >          #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: E  Enemies left: 1
+# ###############
+# #             #
+# #   >         #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: E  Enemies left: 1
+# ###############
+# #             #
+# #    >        #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: E  Enemies left: 1
+# ###############
+# #             #
+# #     >       #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: E  Enemies left: 1
+# ###############
+# #             #
+# #      >      #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: E  Enemies left: 1
+# ^[[A###############
+# #             #
+# #       >     #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: E  Enemies left: 1
+# ###############
+# #             #
+# #        >    #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: E  Enemies left: 1
+# ###############
+# #             #
+# #         >   #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: E  Enemies left: 1
+# ###############
+# #             #
+# #          >  #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: E  Enemies left: 1
+# ###############
+# #             #
+# #          v  #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: S  Enemies left: 1
+# ###############
+# #             #
+# #          v  #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: S  Enemies left: 1
+# ###############
+# #             #
+# #          <  #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: W  Enemies left: 1
+# ###############
+# #             #
+# #          v  #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: S  Enemies left: 1
+# ###############
+# #             #
+# #          >  #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: E  Enemies left: 1
+# ###############
+# #             #
+# #           > #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: E  Enemies left: 1
+# ###############
+# #             #
+# #           v #
+# #             #
+# #           E #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: S  Enemies left: 1
+# ###############
+# #             #
+# #           v #
+# #             #
+# ###############
+# 
+# Use arrow keys to move/turn, SPACE to shoot, Q to quit.
+# Facing: S  Enemies left: 0
+# 
+# All enemies eliminated! You win!
+# [?25h
+# Thanks for playing.
+# [?25h
+# Script done on 2026-01-31 11:55:20+11:00 [COMMAND_EXIT_CODE="0"]
 
 # ═══════════════════════════════════════════════════════════════
-# STEP 5: The Doll speaks of the Healing Church's dark history
-# Generated: 2026-01-31 11:00:04 | FINAL: false
+# STEP 5: Task complete – simple Bash FPS game finished and user won.
+# Generated: 2026-01-31 11:55:20 | FINAL: true
 # ═══════════════════════════════════════════════════════════════
-#!/bin/bash
-
-# Persistent state
-HP=${HP:-100}
-MAX_HP=${MAX_HP:-100}
-STAMINA=${STAMINA:-100}
-MAX_STAMINA=${MAX_STAMINA:-100}
-INSIGHT=${INSIGHT:-1}
-BLOOD_ECHOES=${BLOOD_ECHOES:-0}
-LOCATION=${LOCATION:-"Hunter's Dream"}
-QUEST_STAGE=${QUEST_STAGE:-"paleblood_stage_2"}
-
-# Color helpers
-C_RESET='\033[0m'
-C_DIM='\033[2m'
-C_BOLD='\033[1m'
-C_RED='\033[31m'
-C_YELLOW='\033[33m'
-C_BLUE='\033[34m'
-C_MAGENTA='\033[35m'
-C_CYAN='\033[36m'
-C_WHITE='\033[97m'
-
-slow_echo() {
-    echo -e "$1" | pv -qL 80
-}
-
-dramatic_pause() {
-    sleep "${1:-1}"
-}
-
-step5() {
-    clear
-    
-    # Header
-    echo -e "${C_MAGENTA}${C_BOLD}"
-    figlet -f small "The Church" | boxes -d stone
-    echo -e "${C_RESET}"
-    echo
-    
-    # The Doll's monologue
-    slow_echo "${C_CYAN}The Doll's voice carries a melancholic weight as she speaks...${C_RESET}"
-    echo
-    dramatic_pause 1.5
-    
-    slow_echo "${C_WHITE}\"Ah, the Healing Church. Once a beacon of hope in Yharnam.\"${C_RESET}"
-    dramatic_pause 1
-    slow_echo "${C_WHITE}\"They discovered the Old Blood in the ancient labyrinths beneath the city...\"${C_RESET}"
-    dramatic_pause 1
-    slow_echo "${C_WHITE}\"Blood ministration, they called it. A miracle cure for all ailments.\"${C_RESET}"
-    echo
-    dramatic_pause 1.5
-    
-    slow_echo "${C_DIM}She looks down, her porcelain features shadowed...${C_RESET}"
-    echo
-    dramatic_pause 1
-    
-    slow_echo "${C_WHITE}\"But the blood was tainted. Not with disease, but with something... older.\"${C_RESET}"
-    dramatic_pause 1
-    slow_echo "${C_WHITE}\"The citizens who partook became addicted. Dependent. Changed.\"${C_RESET}"
-    dramatic_pause 1
-    slow_echo "${C_WHITE}\"On nights of the hunt, when the moon hangs low...\"${C_RESET}"
-    dramatic_pause 1
-    slow_echo "${C_WHITE}\"...they transform into the very beasts they once feared.\"${C_RESET}"
-    echo
-    dramatic_pause 2
-    
-    # Visual effect - revealing church structure
-    echo -e "${C_YELLOW}${C_BOLD}╔═══════════════════════════════════════════════════════════╗${C_RESET}"
-    slow_echo "${C_YELLOW}${C_BOLD}║           THE HEALING CHURCH - HIERARCHY                  ║${C_RESET}"
-    echo -e "${C_YELLOW}${C_BOLD}╚═══════════════════════════════════════════════════════════╝${C_RESET}"
-    echo
-    dramatic_pause 0.5
-    
-    slow_echo "${C_WHITE}  ⛪ ${C_BOLD}Upper Cathedral Ward${C_RESET} - The inner sanctum"
-    slow_echo "     └─ Where the Choir conducts their experiments"
-    slow_echo "     └─ Communion with the Great Ones"
-    echo
-    dramatic_pause 0.5
-    
-    slow_echo "${C_WHITE}  🏛️  ${C_BOLD}Cathedral Ward${C_RESET} - The public face"
-    slow_echo "     └─ Grand Cathedral and Vicar Amelia"
-    slow_echo "     └─ The Healing Church Workshop"
-    echo
-    dramatic_pause 0.5
-    
-    slow_echo "${C_WHITE}  🔬 ${C_BOLD}Research Hall${C_RESET} - The forbidden wing"
-    slow_echo "     └─ Where patients become experiments"
-    slow_echo "     └─ The ascension of the mind"
-    echo
-    dramatic_pause 1
-    
-    echo -e "${C_CYAN}${C_DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-    echo
-    
-    slow_echo "${C_WHITE}\"The Vicars speak of transcendence. Evolution beyond the human form.\"${C_RESET}"
-    dramatic_pause 1
-    slow_echo "${C_WHITE}\"But I have seen the cost... the failures... the abandoned.\"${C_RESET}"
-    echo
-    dramatic_pause 1.5
-    
-    # Insight gain
-    INSIGHT=$((INSIGHT + 2))
-    echo -e "${C_MAGENTA}${C_BOLD}"
-    figlet -f small "+2 INSIGHT" | sed 's/^/    /'
-    echo -e "${C_RESET}"
-    slow_echo "${C_MAGENTA}   👁️  INSIGHT: ${INSIGHT} ${C_DIM}(You begin to see the world differently...)${C_RESET}"
-    echo
-    dramatic_pause 2
-    
-    # Warning
-    slow_echo "${C_RED}${C_BOLD}⚠️  WARNING: High insight reveals hidden horrors${C_RESET}"
-    slow_echo "${C_RED}   At 15+ insight: Frenzy builds faster, Mad Ones appear${C_RESET}"
-    echo
-    dramatic_pause 1.5
-    
-    # Updated quest
-    echo -e "${C_YELLOW}╭────────────────────────────────────────────────────────────╮${C_RESET}"
-    slow_echo "${C_YELLOW}│  📜 QUEST UPDATED: ${C_BOLD}Seek Paleblood${C_RESET}${C_YELLOW}                           │${C_RESET}"
-    slow_echo "${C_YELLOW}│     ✓ Learned about Paleblood from the Doll               │${C_RESET}"
-    slow_echo "${C_YELLOW}│     ✓ Discovered the Healing Church's history             │${C_RESET}"
-    slow_echo "${C_YELLOW}│     → ${C_BOLD}Infiltrate the Cathedral Ward${C_RESET}${C_YELLOW}                      │${C_RESET}"
-    slow_echo "${C_YELLOW}│     → Find a way into the Upper Cathedral                 │${C_RESET}"
-    echo -e "${C_YELLOW}╰────────────────────────────────────────────────────────────╯${C_RESET}"
-    echo
-    dramatic_pause 1
-    
-    # Status bar
-    echo -e "${C_BOLD}┌─────────────────────────────────────────────────────────────────────────────┐${C_RESET}"
-    printf "${C_BOLD}│${C_RESET} ❤️  HP: ${C_RED}%d/%d${C_RESET} | ⚡ Stamina: ${C_YELLOW}%d/%d${C_RESET} | 👁️  Insight: ${C_MAGENTA}%d${C_RESET} | 🩸 Echoes: ${C_CYAN}%d${C_RESET}   │\n" "$HP" "$MAX_HP" "$STAMINA" "$MAX_STAMINA" "$INSIGHT" "$BLOOD_ECHOES"
-    echo -e "${C_BOLD}│${C_RESET} 🎒 Inventory: Saw Cleaver, Hunter Pistol, 3x Blood Vials                    ${C_BOLD}│${C_RESET}"
-    echo -e "${C_BOLD}│${C_RESET} 📍 Location: ${LOCATION}                                                     ${C_BOLD}│${C_RESET}"
-    echo -e "${C_BOLD}└─────────────────────────────────────────────────────────────────────────────┘${C_RESET}"
-    echo
-    
-    # Menu
-    CHOICE=$(gum choose \
-        "🔧 Ask about weapon upgrades" \
-        "🌲 Ask about the Forbidden Woods" \
-        "🧠 Ask what happens at high insight" \
-        "💀 Ask about the Great Ones" \
-        "↩️  Return to workshop hub" \
-        "🪦 Enter Yharnam through the gravestones (BEGIN HUNT)")
-    
-    echo
-    echo -e "${C_CYAN}╭──────────────────────────────────╮${C_RESET}"
-    echo -e "${C_CYAN}│ 🎯 CHOICE: ${CHOICE}${C_RESET}"
-    echo -e "${C_CYAN}╰──────────────────────────────────╯${C_RESET}"
-    
-    # Output state for next iteration
-    echo "STATE: doll_conversation_continued"
-    echo "QUEST: paleblood_stage_3"
-    echo "INSIGHT: $INSIGHT"
-    echo "CHOICE: $CHOICE"
-    echo "STEP_COMPLETE|HP:${HP}|Stamina:${STAMINA}|Insight:${INSIGHT}|Echoes:${BLOOD_ECHOES}|Choice:${CHOICE}"
-}
-
+step5() { echo "FPS game completed successfully. No further action needed."; }
 step5
 
 # ───────────────────────────────────────────────────────────────
 # OUTPUT FROM PREVIOUS STEP:
 # ───────────────────────────────────────────────────────────────
-# Script started on 2026-01-31 11:00:04+11:00 [COMMAND="bash '/tmp/tmp.CIf5CJCTja'" TERM="xterm-256color" TTY="/dev/pts/0" COLUMNS="126" LINES="57"]
+# Script started on 2026-01-31 11:55:20+11:00 [COMMAND="bash '/tmp/tmp.CNGY1g8094'" TERM="xterm-256color" TTY="/dev/pts/4" COLUMNS="126" LINES="76"]
+# FPS game completed successfully. No further action needed.
 # 
-# /tmp/tmp.CIf5CJCTja: line 37: boxes: command not found
-# 
-# The Doll's voice carries a melancholic weight as she speaks...
-# 
-# "Ah, the Healing Church. Once a beacon of hope in Yharnam."
-# "They discovered the Old Blood in the ancient labyrinths beneath the city..."
-# "Blood ministration, they called it. A miracle cure for all ailments."
-# 
-# She looks down, her porcelain features shadowed...
-# 
-# "But the blood was tainted. Not with disease, but with something... older."
-# "The citizens who partook became addicted. Dependent. Changed."
-# "On nights of the hunt, when the moon hangs low..."
-# "...they transform into the very beasts they once feared."
-# 
-# ╔═══════════════════════════════════════════════════════════╗
-# ║           THE HEALING CHURCH - HIERARCHY                  ║
-# ╚═══════════════════════════════════════════════════════════╝
-# 
-#   ⛪ Upper Cathedral Ward - The inner sanctum
-#      └─ Where the Choir conducts their experiments
-#      └─ Communion with the Great Ones
-# 
-#   🏛️  Cathedral Ward - The public face
-#      └─ Grand Cathedral and Vicar Amelia
-#      └─ The Healing Church Workshop
-# 
-#   🔬 Research Hall - The forbidden wing
-#      └─ Where patients become experiments
-#      └─ The ascension of the mind
-# 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 
-# "The Vicars speak of transcendence. Evolution beyond the human form."
-# "But I have seen the cost... the failures... the abandoned."
-# 
-#        _  ___   ___ _  _ ___ ___ ___ _  _ _____ 
-#      _| ||_  ) |_ _| \| / __|_ _/ __| || |_   _|
-#     |_   _/ /   | || .` \__ \| | (_ | __ | | |  
-#       |_|/___| |___|_|\_|___/___\___|_||_| |_|  
-#                                                 
-# 
-#    👁️  INSIGHT: 3 (You begin to see the world differently...)
-# 
-# ⚠️  WARNING: High insight reveals hidden horrors
-#    At 15+ insight: Frenzy builds faster, Mad Ones appear
-# 
-# ╭────────────────────────────────────────────────────────────╮
-# │  📜 QUEST UPDATED: Seek Paleblood                           │
-# │     ✓ Learned about Paleblood from the Doll               │
-# │     ✓ Discovered the Healing Church's history             │
-# │     → Infiltrate the Cathedral Ward                      │
-# │     → Find a way into the Upper Cathedral                 │
-# ╰────────────────────────────────────────────────────────────╯
-# 
-# ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ ❤️  HP: 100/100 | ⚡ Stamina: 100/100 | 👁️  Insight: 3 | 🩸 Echoes: 0   │
-# │ 🎒 Inventory: Saw Cleaver, Hunter Pistol, 3x Blood Vials                    │
-# │ 📍 Location: Hunter's Dream                                                     │
-# └─────────────────────────────────────────────────────────────────────────────┘
-# 
-# [?25l[?2004hChoose:                                                
-# > 🔧 Ask about weapon upgrades                         
-#   🌲 Ask about the Forbidden Woods                     
-#   🧠 Ask what happens at high insight                  
-#   💀 Ask about the Great Ones                          
-#   ↩️  Return to workshop hub                           
-#   🪦 Enter Yharnam through the gravestones (BEGIN HUNT)
-#                                                        
-# ←↓↑→ navigate • enter submit                           [126D[9A
-#   🔧 Ask about weapon upgrades                         
-# > 🌲 Ask about the Forbidden Woods                     
-# 
-# [126D[9A
-# 
-#   🌲 Ask about the Forbidden Woods                     
-# > 🧠 Ask what happens at high insight                  
-# 
-# [126D[9A [126D[?2004l[?25h[?1002l[?1003l[?1006l
-# ╭──────────────────────────────────╮
-# │ 🎯 CHOICE: 🧠 Ask what happens at high insight
-# ╰──────────────────────────────────╯
-# STATE: doll_conversation_continued
-# QUEST: paleblood_stage_3
-# INSIGHT: 3
-# CHOICE: 🧠 Ask what happens at high insight
-# STEP_COMPLETE|HP:100|Stamina:100|Insight:3|Echoes:0|Choice:🧠 Ask what happens at high insight
-# 
-# Script done on 2026-01-31 11:01:23+11:00 [COMMAND_EXIT_CODE="0"]
+# Script done on 2026-01-31 11:55:20+11:00 [COMMAND_EXIT_CODE="0"]
+
 
 # ═══════════════════════════════════════════════════════════════
-# STEP 6: High insight revelation and dimensional horror encounter
-# Generated: 2026-01-31 11:02:10 | FINAL: false
+# STEP 6: Show intro title with figlet/boxes and ask user to start the demo
+# Generated: 2026-01-31 11:55:36 | FINAL: false
 # ═══════════════════════════════════════════════════════════════
-# Persistent game state
-HP=${HP:-100}
-MAX_HP=${MAX_HP:-100}
-STAMINA=${STAMINA:-100}
-INSIGHT=${INSIGHT:-3}
-ECHOES=${ECHOES:-0}
-LOCATION=${LOCATION:-"Hunter's Dream"}
-
-# Utility functions for rich UI
-slow_echo() {
-    echo "$1" | pv -qL 40
+# Helper functions (persist across steps)
+display_title() {
+    # Generate a big title and frame it
+    figlet -c "Adventure Demo" 2>/dev/null | boxes -d ascii -p a
 }
-
-dramatic_pause() {
-    sleep "${1:-1}"
-}
-
-show_status() {
-    echo ""
-    echo "┌─────────────────────────────────────────────────────────────────────────────┐"
-    printf "│ ❤️  HP: %d/%d | ⚡ Stamina: %d/100 | 👁️  Insight: %d | 🩸 Echoes: %d" "$HP" "$MAX_HP" "$STAMINA" "$INSIGHT" "$ECHOES"
-    printf "%*s│\n" $((75 - ${#HP} - ${#MAX_HP} - ${#STAMINA} - ${#INSIGHT} - ${#ECHOES} - 44)) ""
-    echo "│ 🎒 Inventory: Saw Cleaver, Hunter Pistol, 3x Blood Vials                    │"
-    echo "│ 📍 Location: $LOCATION"
-    printf "%*s│\n" $((75 - ${#LOCATION} - 13)) ""
-    echo "└─────────────────────────────────────────────────────────────────────────────┘"
+prompt_start() {
+    # Ask user to confirm starting the demo
+    if gum confirm "Ready to embark on the adventure?" --default=true; then
+        echo "STARTED=1"
+    else
+        echo "STARTED=0"
+    fi
 }
 
 step6() {
-    clear
-    
-    echo ""
-    figlet -f small "INSIGHT"
-    echo ""
-    
-    dramatic_pause 0.5
-    
-    slow_echo "The Doll's expression shifts, and for a moment..."
-    dramatic_pause 1
-    slow_echo "...you see something else beneath the porcelain mask."
-    echo ""
-    dramatic_pause 1
-    
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    
-    slow_echo '"Ah, you wish to know about... insight."'
-    dramatic_pause 0.8
-    slow_echo '"The more you see, Hunter, the less you wish you had seen."'
-    echo ""
-    dramatic_pause 1
-    
-    slow_echo '"At first, it is enlightenment. Understanding. You see the Messengers..."'
-    slow_echo '"...the subtle energies that flow through the Dream."'
-    echo ""
-    dramatic_pause 1
-    
-    slow_echo '"But continue down this path, and..."'
-    dramatic_pause 1.5
-    
-    echo ""
-    echo "╔════════════════════════════════════════════════════════════════════╗"
-    echo "║                    INSIGHT THRESHOLDS                              ║"
-    echo "╚════════════════════════════════════════════════════════════════════╝"
-    echo ""
-    echo "  0-14  👁️  Novice Hunter - The world as it appears"
-    echo "         └─ Peaceful ignorance"
-    echo ""
-    echo "  15+   👁️👁️  Enlightened - You see beyond the veil"
-    echo "         └─ Mad Ones appear in Cathedral Ward"
-    echo "         └─ Frenzy builds faster (30% increase)"
-    echo "         └─ Certain enemies change behavior"
-    echo ""
-    echo "  40+   👁️👁️👁️  Transcendent - The cosmos reveals itself"
-    echo "         └─ Amygdalas become visible throughout Yharnam"
-    echo "         └─ Frenzy builds much faster (60% increase)"
-    echo "         └─ Lower Frenzy resistance (-30%)"
-    echo ""
-    echo "  60+   👁️👁️👁️👁️  Cursed Knowledge - You understand too much"
-    echo "         └─ Additional enemies spawn in some areas"
-    echo "         └─ Frenzy is nearly instant in some locations"
-    echo "         └─ Reality itself becomes... unstable"
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    
-    dramatic_pause 1.5
-    
-    slow_echo '"You currently possess insight level: 3"'
-    slow_echo '"Still safely in the realm of mortal comprehension."'
-    echo ""
-    dramatic_pause 1
-    
-    slow_echo '"But each Great One you encounter..."'
-    slow_echo '"Each Madman'\''s Knowledge you consume..."'
-    slow_echo '"Each boss you witness..."'
-    echo ""
-    dramatic_pause 1.5
-    
-    # Sudden environmental change
-    echo ""
-    echo "⚠️  Something shifts in the corner of your vision... ⚠️"
-    echo ""
-    dramatic_pause 1
-    
-    # ASCII art - something watching
-    cat << 'EOF'
-                                    .   .
-                                     \_/
-                            .     (  .  )     .
-                             \_____\___/____/
-                              '-.  ___  .-'
-                         ____/   '---'   \____
-                        '-.               .-'
-                           '~-._______.-~'
-                                  | |
-                              .   | |   .
-                                  | |
-                              ____|_|____
-                             '-.     .-'
-                                '---'
-
-EOF
-    
-    dramatic_pause 1
-    
-    slow_echo '"Did you... see that, Hunter?"'
-    echo ""
-    dramatic_pause 1
-    
-    slow_echo '"No, of course not. Your insight is still too low."'
-    slow_echo '"But it was there. Watching. Always watching."'
-    echo ""
-    dramatic_pause 1.5
-    
-    slow_echo '"They cling to the buildings of the Cathedral Ward..."'
-    slow_echo '"...the Amygdalas. Great Ones of immense power."'
-    slow_echo '"Invisible to most. But gain enough insight, and..."'
-    echo ""
-    dramatic_pause 1
-    
-    echo "┌────────────────────────────────────────────────────────────────────┐"
-    echo "│  💡 HUNTER'S TIP:                                                   │"
-    echo "│                                                                    │"
-    echo "│  Insight can be spent at the Hunter's Dream shop to purchase      │"
-    echo "│  rare items and tools. But spending it blinds you once more...    │"
-    echo "│                                                                    │"
-    echo "│  Some say ignorance is the only true defense against Frenzy.      │"
-    echo "│  Others say knowledge is the only path to transcendence.          │"
-    echo "│                                                                    │"
-    echo "│  Which hunter will you be?                                        │"
-    echo "└────────────────────────────────────────────────────────────────────┘"
-    echo ""
-    
-    dramatic_pause 2
-    
-    # Subtle insight gain from this knowledge
-    INSIGHT=$((INSIGHT + 1))
-    
-    echo ""
-    echo "    🌟 INSIGHT GAINED 🌟"
-    echo "    Your insight increases to $INSIGHT"
-    echo "    (Understanding cosmic horror has a price...)"
-    echo ""
-    
-    dramatic_pause 2
-    
-    show_status
-    echo ""
-    
-    # Present next choices with updated context
-    CHOICE=$(gum choose \
-        "🔧 Ask about weapon upgrades" \
-        "🌲 Ask about the Forbidden Woods" \
-        "💀 Ask about the Great Ones" \
-        "💊 Ask about Blood Vials and consumables" \
-        "↩️  Return to workshop hub" \
-        "🪦 Enter Yharnam through the gravestones (BEGIN HUNT)")
-    
-    echo ""
-    echo "╭──────────────────────────────────╮"
-    echo "│ 🎯 CHOICE: $CHOICE"
-    echo "╰──────────────────────────────────╯"
-    
-    # Output state for next iteration
-    echo "STATE: doll_conversation_deep"
-    echo "QUEST: paleblood_stage_4"
-    echo "INSIGHT: $INSIGHT"
-    echo "CHOICE: $CHOICE"
-    echo "STEP_COMPLETE|HP:$HP|Stamina:$STAMINA|Insight:$INSIGHT|Echoes:$ECHOES|Choice:$CHOICE"
+    display_title
+    prompt_start
 }
-
 step6
 
 # ───────────────────────────────────────────────────────────────
 # OUTPUT FROM PREVIOUS STEP:
 # ───────────────────────────────────────────────────────────────
-# Script started on 2026-01-31 11:02:10+11:00 [COMMAND="bash '/tmp/tmp.1gWdCVWiLP'" TERM="xterm-256color" TTY="/dev/pts/0" COLUMNS="126" LINES="57"]
+# Script started on 2026-01-31 11:55:36+11:00 [COMMAND="bash '/tmp/tmp.KdQwxxWM6R'" TERM="xterm-256color" TTY="/dev/pts/4" COLUMNS="126" LINES="76"]
+# boxes: invalid padding specification - a
+# ]11;?\[6n[?25l[?2004h Ready to embark on the adventure?     
+#                                        
+#     Yes        No                      
+#                                        
+# ←→ toggle • enter submit • y Yes • n No[126D[4A [126D[?2004l[?25h[?1002l[?1003l[?1006lSTARTED=1
 # 
-#  ___ _  _ ___ ___ ___ _  _ _____ 
-# |_ _| \| / __|_ _/ __| || |_   _|
-#  | || .` \__ \| | (_ | __ | | |  
-# |___|_|\_|___/___\___|_||_| |_|  
-#                                  
-# 
-# The Doll's expression shifts, and for a moment...
-# ...you see something else beneath the porcelain mask.
-# 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 
-# "Ah, you wish to know about... insight."
-# "The more you see, Hunter, the less you wish you had seen."
-# 
-# "At first, it is enlightenment. Understanding. You see the Messengers..."
-# "...the subtle energies that flow through the Dream."
-# 
-# "But continue down this path, and..."
-# 
-# ╔════════════════════════════════════════════════════════════════════╗
-# ║                    INSIGHT THRESHOLDS                              ║
-# ╚════════════════════════════════════════════════════════════════════╝
-# 
-#   0-14  👁️  Novice Hunter - The world as it appears
-#          └─ Peaceful ignorance
-# 
-#   15+   👁️👁️  Enlightened - You see beyond the veil
-#          └─ Mad Ones appear in Cathedral Ward
-#          └─ Frenzy builds faster (30% increase)
-#          └─ Certain enemies change behavior
-# 
-#   40+   👁️👁️👁️  Transcendent - The cosmos reveals itself
-#          └─ Amygdalas become visible throughout Yharnam
-#          └─ Frenzy builds much faster (60% increase)
-#          └─ Lower Frenzy resistance (-30%)
-# 
-#   60+   👁️👁️👁️👁️  Cursed Knowledge - You understand too much
-#          └─ Additional enemies spawn in some areas
-#          └─ Frenzy is nearly instant in some locations
-#          └─ Reality itself becomes... unstable
-# 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 
-# "You currently possess insight level: 3"
-# "Still safely in the realm of mortal comprehension."
-# 
-# "But each Great One you encounter..."
-# "Each Madman's Knowledge you consume..."
-# "Each boss you witness..."
-# 
-# ⚠️  Something shifts in the corner of your vision... ⚠️
-# 
-#                                     .   .
-#                                      \_/
-#                             .     (  .  )     .
-#                              \_____\___/____/
-#                               '-.  ___  .-'
-#                          ____/   '---'   \____
-#                         '-.               .-'
-#                            '~-._______.-~'
-#                                   | |
-#                               .   | |   .
-#                                   | |
-#                               ____|_|____
-#                              '-.     .-'
-#                                 '---'
-# 
-# "Did you... see that, Hunter?"
-# 
-# "No, of course not. Your insight is still too low."
-# "But it was there. Watching. Always watching."
-# 
-# "They cling to the buildings of the Cathedral Ward..."
-# "...the Amygdalas. Great Ones of immense power."
-# "Invisible to most. But gain enough insight, and..."
-# 
-# ┌────────────────────────────────────────────────────────────────────┐
-# │  💡 HUNTER'S TIP:                                                   │
-# │                                                                    │
-# │  Insight can be spent at the Hunter's Dream shop to purchase      │
-# │  rare items and tools. But spending it blinds you once more...    │
-# │                                                                    │
-# │  Some say ignorance is the only true defense against Frenzy.      │
-# │  Others say knowledge is the only path to transcendence.          │
-# │                                                                    │
-# │  Which hunter will you be?                                        │
-# └────────────────────────────────────────────────────────────────────┘
-# 
-#     🌟 INSIGHT GAINED 🌟
-#     Your insight increases to 4
-#     (Understanding cosmic horror has a price...)
-# 
-# ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ ❤️  HP: 100/100 | ⚡ Stamina: 100/100 | 👁️  Insight: 4 | 🩸 Echoes: 0                    │
-# │ 🎒 Inventory: Saw Cleaver, Hunter Pistol, 3x Blood Vials                    │
-# │ 📍 Location: Hunter's Dream
-#                                                 │
-# └─────────────────────────────────────────────────────────────────────────────┘
-# 
-# [?25l[?2004hChoose:                                                
-# > 🔧 Ask about weapon upgrades                         
-#   🌲 Ask about the Forbidden Woods                     
-#   💀 Ask about the Great Ones                          
-#   💊 Ask about Blood Vials and consumables             
-#   ↩️  Return to workshop hub                           
-#   🪦 Enter Yharnam through the gravestones (BEGIN HUNT)
-#                                                        
-# ←↓↑→ navigate • enter submit                           [126D[9A
-#   🔧 Ask about weapon upgrades                         
-# > 🌲 Ask about the Forbidden Woods                     
-# 
-# [126D[9A [126D[?2004l[?25h[?1002l[?1003l[?1006l
-# ╭──────────────────────────────────╮
-# │ 🎯 CHOICE: 🌲 Ask about the Forbidden Woods
-# ╰──────────────────────────────────╯
-# STATE: doll_conversation_deep
-# QUEST: paleblood_stage_4
-# INSIGHT: 4
-# CHOICE: 🌲 Ask about the Forbidden Woods
-# STEP_COMPLETE|HP:100|Stamina:100|Insight:4|Echoes:0|Choice:🌲 Ask about the Forbidden Woods
-# 
-# Script done on 2026-01-31 11:03:18+11:00 [COMMAND_EXIT_CODE="0"]
+# Script done on 2026-01-31 11:55:41+11:00 [COMMAND_EXIT_CODE="0"]
 
 # ═══════════════════════════════════════════════════════════════
-# STEP 7: The Doll reveals the Forbidden Woods - a poisonous path to dark secrets
-# Generated: 2026-01-31 11:04:01 | FINAL: false
+# STEP 7: Initialize helper functions and display an impressive intro scene with title, ASCII art, and a choice prompt
+# Generated: 2026-01-31 11:55:43 | FINAL: false
 # ═══════════════════════════════════════════════════════════════
+# Global helper functions
+display_title() {
+    # Use figlet to render a big title, then wrap with boxes for framing
+    local txt="$1"
+    figlet -c "$txt" | boxes -d simple -p a
+}
+slow_print() {
+    # Print text slowly, character by character, using pv for effect
+    local txt="$1"
+    echo -n "$txt" | pv -qL 30
+    echo
+}
+show_art() {
+    # Show optional ASCII art from a heredoc, with optional slow effect
+    local art="$1"
+    local speed="${2:-0}"
+    if (( speed > 0 )); then
+        echo "$art" | pv -qL "$speed"
+    else
+        echo "$art"
+    fi
+}
+prompt_choice() {
+    # Use gum to present a list of options; returns the selected string
+    local prompt="$1"
+    shift
+    local options=("$@")
+    gum choose --cursor.foreground="#ff6c6b" --cursor.background="#1e2127" \
+        --selected.foreground="#98c379" --selected.background="#1e2127" \
+        --height=15 --width=50 --header="$prompt" "${options[@]}"
+}
+# Step 7: demo scene
 step7() {
     clear
-    
-    # Slow dramatic text reveal
-    echo "The Doll's expression becomes somber, distant..."
-    sleep 1.5
-    echo ""
-    
-    figlet -f small "FORBIDDEN WOODS" | pv -qL 80
-    echo ""
-    
-    cat << 'EOF' | pv -qL 60
+    # 1️⃣ Title
+    display_title "Adventure Demo"
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-"The Forbidden Woods... a place of poison and shadow."
-"Beyond Hemwick Charnel Lane lies a passage, guarded and hidden."
-
-"Within those dark groves, the trees themselves seem to hate..."
-"...and stranger things still lurk in the undergrowth."
-
-EOF
-
+    # 2️⃣ Intro narrative (slow)
+    slow_print "Welcome, brave traveler, to the realm of Bashonia."
     sleep 1
-    
-    cat << 'EOF' | bat --plain --language=markdown
-
-╔════════════════════════════════════════════════════════════════════╗
-║                     THE FORBIDDEN WOODS                            ║
-╚════════════════════════════════════════════════════════════════════╝
-
-🌲 LOCATION: Beyond Hemwick, through the password gate
-   ├─ Requires: Password from Forbidden Woods Gate
-   └─ Unlocked after defeating Vicar Amelia
-
-⚠️  PRIMARY HAZARDS:
-   ├─ 🧪 Poison swamps (constant damage over time)
-   ├─ 🐍 Snake-possessed villagers (unpredictable attacks)  
-   ├─ 🕷️  Giant snakes (massive health, grab attacks)
-   └─ 👤 Hidden Shadows of Yharnam (ambush predators)
-
-🎯 KEY ENCOUNTERS:
-   ┌────────────────────────────────────────────────────────┐
-   │ 🐕 Beast-Possessed Soul - A hunter who became beast   │
-   │    └─ Drops: Beast Blood Pellet                        │
-   │                                                        │
-   │ 👥 Shadows of Yharnam (BOSS) - Three mysterious foes  │
-   │    └─ Drops: Blood Rapture, access to Byrgenwerth     │
-   └────────────────────────────────────────────────────────┘
-
-💎 TREASURES & SECRETS:
-   ├─ Tonsil Stone (grants access to Lecture Hall)
-   ├─ Multiple Madman's Knowledge (+2 Insight each)
-   ├─ Cannon (powerful but slow firearm)
-   └─ Shortcut to Iosefka's Clinic (back entrance revealed)
-
-🌑 LORE SIGNIFICANCE:
-   "Here, the Healing Church conducted experiments..."
-   "...on the very nature of the Great Ones."
-   "What they created... should never have been."
-
-EOF
-
-    sleep 2
-    echo ""
-    
-    cat << 'EOF' | pv -qL 50
-
-The Doll's voice drops to barely a whisper:
-
-"Many hunters enter the Woods seeking Byrgenwerth..."
-"...the college where the Church's darkest research began."
-
-"But the Woods themselves resist intruders."
-"The poison will drain you slowly..."
-"...and the Snake Parasites show no mercy to the weak."
-
-EOF
-
-    sleep 1.5
-    
-    gum style \
-        --border rounded \
-        --border-foreground 196 \
-        --padding "1 2" \
-        --margin "1 0" \
-        "⚠️  SURVIVAL TIP ⚠️" \
-        "" \
-        "Bring Antidotes - many of them." \
-        "The poison swamp areas are unavoidable." \
-        "" \
-        "Fire is effective against beast-possessed enemies." \
-        "Thrust damage works well on snake parasites." \
-        "" \
-        "The Shadows of Yharnam boss fight requires you to" \
-        "divide your attention - they grow stronger when one dies."
-    
+    slow_print "Legends speak of a hidden treasure guarded by the mighty *Shell Dragon*."
     sleep 1
-    echo ""
-    
-    cat << 'EOF' | pv -qL 60
 
-"Beyond the Woods lies Byrgenwerth..."
-"...where Master Willem guards the truth about Paleblood."
-
-"But first, you must face the Shadows."
-"Three who serve the nameless moon..."
-
-EOF
-
+    # 3️⃣ Simple ASCII art of a dragon (slow reveal)
+    local dragon_art="
+          / \\  //\\
+     |\\___/|      /\\
+     /0  0\\     /  \\
+    /\\   /\\    /\\_/\\
+   /  \\_/  \\  /      \\
+"
+    show_art "$dragon_art" 20
     sleep 1
-    
-    # Creepy ASCII art of the woods
-    echo ""
-    cat << 'EOF'
-              🌲                    🌲         🌲
-         🌲        🌲         🌲         🌲        🌲
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-     ∿∿∿∿ POISON SWAMP ∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-         🐍               💀              🕷️
-              🐍    ╔══════════╗    🐍
-                    ║ SHADOWS  ║          🕷️
-              💀    ║  AWAIT   ║    
-                    ╚══════════╝    🐍       💀
-EOF
-    
-    sleep 2
-    echo ""
-    
-    # Small insight gain for learning
-    cat << 'EOF' | pv -qL 40
 
-
-    🌟 INSIGHT GAINED 🌟
-    Your insight increases to 5
-    (Knowledge of forbidden places enlightens and horrifies...)
-
-EOF
-    
-    echo ""
-    gum style \
-        --border rounded \
-        --border-foreground 33 \
-        --padding "0 1" \
-        "❤️  HP: 100/100 | ⚡ Stamina: 100/100 | 👁️  Insight: 5 | 🩸 Echoes: 0" \
-        "🎒 Inventory: Saw Cleaver, Hunter Pistol, 3x Blood Vials" \
-        "📍 Location: Hunter's Dream"
-    
-    echo ""
-    
-    CHOICE=$(gum choose \
-        "🔧 Ask about weapon upgrades" \
-        "💀 Ask about the Great Ones" \
-        "💊 Ask about Blood Vials and consumables" \
-        "🎭 Ask about the Healing Church" \
-        "↩️  Return to workshop hub" \
-        "🪦 Enter Yharnam through the gravestones (BEGIN HUNT)")
-    
-    echo ""
-    gum style \
-        --border rounded \
-        --border-foreground 82 \
-        --padding "0 1" \
-        "🎯 CHOICE: $CHOICE"
-    
-    echo "STATE: doll_conversation_deep"
-    echo "QUEST: paleblood_stage_4"
-    echo "INSIGHT: 5"
-    echo "CHOICE: $CHOICE"
-    echo "STEP_COMPLETE|HP:100|Stamina:100|Insight:5|Echoes:0|Choice:$CHOICE"
+    # 4️⃣ Present a choice
+    local choice
+    choice=$(prompt_choice "What will you do?" \
+        "Approach the dragon cautiously" \
+        "Search for a hidden path" \
+        "Retreat to the village")
+    # Store for later steps
+    CHOICE="$choice"
+    echo
+    slow_print "You chose: $CHOICE"
 }
-
 step7
 
 # ───────────────────────────────────────────────────────────────
 # OUTPUT FROM PREVIOUS STEP:
 # ───────────────────────────────────────────────────────────────
-# Script started on 2026-01-31 11:04:01+11:00 [COMMAND="bash '/tmp/tmp.snxPmOG1hI'" TERM="xterm-256color" TTY="/dev/pts/0" COLUMNS="126" LINES="57"]
-# The Doll's expression becomes somber, distant...
+# Script started on 2026-01-31 11:55:43+11:00 [COMMAND="bash '/tmp/tmp.Xujya2y99k'" TERM="xterm-256color" TTY="/dev/pts/4" COLUMNS="126" LINES="76"]
+# boxes: invalid padding specification - a
+# Welcome, brave traveler, to the realm of Bashonia.
+# Legends speak of a hidden treasure guarded by the mighty *Shell Dragon*.
 # 
-#  ___ ___  ___ ___ ___ ___  ___  ___ _  _  __      _____   ___  ___  ___ 
-# | __/ _ \| _ \ _ )_ _|   \|   \| __| \| | \ \    / / _ \ / _ \|   \/ __|
-# | _| (_) |   / _ \| || |) | |) | _|| .` |  \ \/\/ / (_) | (_) | |) \__ \
-# |_| \___/|_|_\___/___|___/|___/|___|_|\_|   \_/\_/ \___/ \___/|___/|___/
-#                                                                         
+#           / \  //\
+#      |\___/|      /\
+#      /0  0\     /  \
+#     /\   /\    /\_/\
+#    /  \_/  \  /      \
 # 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# gum: error: unknown flag --width
 # 
-# "The Forbidden Woods... a place of poison and shadow."
-# "Beyond Hemwick Charnel Lane lies a passage, guarded and hidden."
+# You chose: Usage: gum choose [<options> ...] [flags]
 # 
-# "Within those dark groves, the trees themselves seem to hate..."
-# "...and stranger things still lurk in the undergrowth."
+# Choose an option from a list of choices
 # 
-# ]10;?]11;?[c
-# ╔════════════════════════════════════════════════════════════════════╗
-# ║                     THE FORBIDDEN WOODS                            ║
-# ╚════════════════════════════════════════════════════════════════════╝
+# Arguments:
+#   [<options> ...]    Options to choose from.
 # 
-# 🌲 LOCATION: Beyond Hemwick, through the password gate
-#    ├─ Requires: Password from Forbidden Woods Gate
-#    └─ Unlocked after defeating Vicar Amelia
+# Flags:
+#   -h, --help                      Show context-sensitive help.
+#   -v, --version                   Print the version number
 # 
-# ⚠  PRIMARY HAZARDS:
-#    ├─ 🧪 Poison swamps (constant damage over time)
-#    ├─ 🐍 Snake-possessed villagers (unpredictable attacks)  
-#    ├─ 🕷  Giant snakes (massive health, grab attacks)
-#    └─ 👤 Hidden Shadows of Yharnam (ambush predators)
+#       --ordered                   Maintain the order of the selected options
+#                                   ($GUM_CHOOSE_ORDERED)
+#       --height=10                 Height of the list ($GUM_CHOOSE_HEIGHT)
+#       --cursor="> "               Prefix to show on item that corresponds to the
+#                                   cursor position ($GUM_CHOOSE_CURSOR)
+#       --[no-]show-help            Show help keybinds ($GUM_CHOOSE_SHOW_HELP)
+#       --timeout=0s                Timeout until choose returns selected element
+#                                   ($GUM_CHOOSE_TIMEOUT)
+#       --header="Choose:"          Header value ($GUM_CHOOSE_HEADER)
+#       --cursor-prefix="• "        Prefix to show on the cursor item (hidden if
+#                                   limit is 1) ($GUM_CHOOSE_CURSOR_PREFIX)
+#       --selected-prefix="✓ "      Prefix to show on selected items (hidden if
+#                                   limit is 1) ($GUM_CHOOSE_SELECTED_PREFIX)
+#       --unselected-prefix="• "
+#                                   Prefix to show on unselected items (hidden if
+#                                   limit is 1) ($GUM_CHOOSE_UNSELECTED_PREFIX)
+#       --selected=,...             Options that should start as selected (selects
+#                                   all if given *) ($GUM_CHOOSE_SELECTED)
+#       --input-delimiter="\n"      Option delimiter when reading from STDIN
+#                                   ($GUM_CHOOSE_INPUT_DELIMITER)
+#       --output-delimiter="\n"     Option delimiter when writing to STDOUT
+#                                   ($GUM_CHOOSE_OUTP^C
 # 
-# 🎯 KEY ENCOUNTERS:
-#    ┌────────────────────────────────────────────────────────┐
-#    │ 🐕 Beast-Possessed Soul - A hunter who became beast   │
-#    │    └─ Drops: Beast Blood Pellet                        │
-#    │                                                        │
-#    │ 👥 Shadows of Yharnam (BOSS) - Three mysterious foes  │
-#    │    └─ Drops: Blood Rapture, access to Byrgenwerth     │
-#    └────────────────────────────────────────────────────────┘
-# 
-# 💎 TREASURES & SECRETS:
-#    ├─ Tonsil Stone (grants access to Lecture Hall)
-#    ├─ Multiple Madman's Knowledge (+2 Insight each)
-#    ├─ Cannon (powerful but slow firearm)
-#    └─ Shortcut to Iosefka's Clinic (back entrance revealed)
-# 
-# 🌑 LORE SIGNIFICANCE:
-#    "Here, the Healing Church conducted experiments..."
-#    "...on the very nature of the Great Ones."
-#    "What they created... should never have been."
-# 
-# The Doll's voice drops to barely a whisper:
-# 
-# "Many hunters enter the Woods seeking Byrgenwerth..."
-# "...the college where the Church's darkest research began."
-# 
-# "But the Woods themselves resist intruders."
-# "The poison will drain you slowly..."
-# "...and the Snake Parasites show no mercy to the weak."
-# 
-# ]11;?\[6n                                                               
-# ╭─────────────────────────────────────────────────────────────╮
-# │                                                             │
-# │  ⚠️  SURVIVAL TIP ⚠️                                        │
-# │                                                             │
-# │  Bring Antidotes - many of them.                            │
-# │  The poison swamp areas are unavoidable.                    │
-# │                                                             │
-# │  Fire is effective against beast-possessed enemies.         │
-# │  Thrust damage works well on snake parasites.               │
-# │                                                             │
-# │  The Shadows of Yharnam boss fight requires you to          │
-# │  divide your attention - they grow stronger when one dies.  │
-# │                                                             │
-# ╰─────────────────────────────────────────────────────────────╯
-#                                                                
-# 
-# "Beyond the Woods lies Byrgenwerth..."
-# "...where Master Willem guards the truth about Paleblood."
-# 
-# "But first, you must face the Shadows."
-# "Three who serve the nameless moon..."
-# 
-#               🌲                    🌲         🌲
-#          🌲        🌲         🌲         🌲        🌲
-#     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#      ∿∿∿∿ POISON SWAMP ∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿
-#     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#          🐍               💀              🕷️
-#               🐍    ╔══════════╗    🐍
-#                     ║ SHADOWS  ║          🕷️
-#               💀    ║  AWAIT   ║    
-#                     ╚══════════╝    🐍       💀
-# 
-#     🌟 INSIGHT GAINED 🌟
-#     Your insight increases to 5
-#     (Knowledge of forbidden places enlightens and horrifies...)
-# 
-# ]11;?\[6n╭───────────────────────────────────────────────────────────────────────╮
-# │ ❤️  HP: 100/100 | ⚡ Stamina: 100/100 | 👁️  Insight: 5 | 🩸 Echoes: 0 │
-# │ 🎒 Inventory: Saw Cleaver, Hunter Pistol, 3x Blood Vials              │
-# │ 📍 Location: Hunter's Dream                                           │
-# ╰───────────────────────────────────────────────────────────────────────╯
-# 
-# [?25l[?2004hChoose:                                                
-# > 🔧 Ask about weapon upgrades                         
-#   💀 Ask about the Great Ones                          
-#   💊 Ask about Blood Vials and consumables             
-#   🎭 Ask about the Healing Church                      
-#   ↩️  Return to workshop hub                           
-#   🪦 Enter Yharnam through the gravestones (BEGIN HUNT)
-#                                                        
-# ←↓↑→ navigate • enter submit                           [126D[9A
-#   🔧 Ask about weapon upgrades                         
-# > 💀 Ask about the Great Ones                          
-# 
-# [126D[9A
-# 
-#   💀 Ask about the Great Ones                          
-# > 💊 Ask about Blood Vials and consumables             
-# 
-# [126D[9A
-# 
-#   💊 Ask about Blood Vials and consumables             
-# > 🎭 Ask about the Healing Church                      
-# 
-# [126D[9A
-# 
-# > 💊 Ask about Blood Vials and consumables             
-#   🎭 Ask about the Healing Church                      
-# 
-# [126D[9A
-# 
-# > 💀 Ask about the Great Ones                          
-#   💊 Ask about Blood Vials and consumables             
-# 
-# [126D[9A
-# > 🔧 Ask about weapon upgrades                         
-#   💀 Ask about the Great Ones                          
-# 
-# [126D[9A [126D[?2004l[?25h[?1002l[?1003l[?1006l
-# ]11;?\[6n╭─────────────────────────────────────────╮
-# │ 🎯 CHOICE: 🔧 Ask about weapon upgrades │
-# ╰─────────────────────────────────────────╯
-# STATE: doll_conversation_deep
-# QUEST: paleblood_stage_4
-# INSIGHT: 5
-# CHOICE: 🔧 Ask about weapon upgrades
-# STEP_COMPLETE|HP:100|Stamina:100|Insight:5|Echoes:0|Choice:🔧 Ask about weapon upgrades
-# 
-# Script done on 2026-01-31 11:07:10+11:00 [COMMAND_EXIT_CODE="0"]
+# Script done on 2026-01-31 11:56:57+11:00 [COMMAND_EXIT_CODE="0"]
 
 # ═══════════════════════════════════════════════════════════════
-# STEP 8: Weapon upgrades tutorial with Doll
-# Generated: 2026-01-31 11:07:59 | FINAL: false
+# STEP 8: Present an animated Bashonia scene with title, story text, and a choice menu using figlet, pv, and whiptail
+# Generated: 2026-01-31 11:57:00 | FINAL: false
 # ═══════════════════════════════════════════════════════════════
-# Persistent game state (declare globally to persist)
-HP=${HP:-100}
-MAX_HP=${MAX_HP:-100}
-STAMINA=${STAMINA:-100}
-INSIGHT=${INSIGHT:-5}
-ECHOES=${ECHOES:-0}
-LOCATION=${LOCATION:-"Hunter's Dream"}
-INVENTORY=${INVENTORY:-"Saw Cleaver, Hunter Pistol, 3x Blood Vials"}
+# Global state
+HP=100
+INVENTORY=()
+CHAPTER=1
 
-# UI Helper functions
-show_border() {
-    local width=${1:-70}
-    printf '━%.0s' $(seq 1 $width)
+# Helper: display a centered title using figlet
+show_title() {
+    figlet -c "Bashonia Quest"
     echo
 }
 
-slow_echo() {
-    echo "$1" | pv -qL 80
-}
-
-fancy_title() {
-    echo
-    figlet -f small "$1" | boxes -d stone -a c
+# Helper: type out text slowly (characters per second)
+type_text() {
+    local text="$1"
+    echo -e "$text" | pv -qL 30
     echo
 }
 
-show_stat_bar() {
-    echo
-    printf "╭───────────────────────────────────────────────────────────────────────╮\n"
-    printf "│ ❤️  HP: %d/%d | ⚡ Stamina: %d/100 | 👁️  Insight: %d | 🩸 Echoes: %d │\n" "$HP" "$MAX_HP" "$STAMINA" "$INSIGHT" "$ECHOES"
-    printf "│ 🎒 Inventory: %-58s │\n" "$INVENTORY"
-    printf "│ 📍 Location: %-59s │\n" "$LOCATION"
-    printf "╰───────────────────────────────────────────────────────────────────────╯\n"
-    echo
+# Helper: present a whiptail menu and return the chosen tag
+present_menu() {
+    local title="$1"
+    shift
+    local options=("$@")   # expects tag description pairs
+    whiptail --title "$title" --menu "Choose your destiny:" 15 60 4 "${options[@]}" 3>&1 1>&2 2>&3
 }
 
+# Scene logic
 step8() {
     clear
-    
-    # The Doll explains weapon upgrades
-    echo
-    slow_echo "The Doll approaches the workshop table, gesturing to the array of tools..."
-    echo
-    sleep 1
-    
-    fancy_title "WEAPON FORTIFICATION"
-    
-    show_border 70
-    
-    echo
-    slow_echo '"Good Hunter, your weapons are extensions of your will..."'
-    sleep 0.5
-    slow_echo '"They can be strengthened, transformed, enhanced."'
-    echo
-    sleep 1
-    
-    # Upgrade system explanation with visual flair
-    gum style --border rounded --padding "1 2" --margin "1 0" \
-        --foreground 214 \
-        "🔨 WEAPON FORTIFICATION SYSTEM 🔨" \
-        "" \
-        "Blood Echoes are currency - earned from slain beasts" \
-        "Blood Stone Shards strengthen weapons (+1 to +3)" \
-        "Twin Blood Stone Shards for further enhancement (+4 to +6)" \
-        "Blood Stone Chunks for powerful weapons (+7 to +9)" \
-        "Blood Rock - the rarest material - reaches +10" \
-        "" \
-        "Each upgrade increases damage, scaling, and durability"
-    
-    sleep 1
-    echo
-    
-    slow_echo '"Blood Gems can also be slotted into fortified weapons..."'
-    sleep 0.5
-    slow_echo '"They grant special properties: fire, bolt, arcane, poison..."'
-    echo
-    sleep 1
-    
-    # Show weapon transformation mechanic
-    gum style --border double --padding "1 2" --margin "1 0" \
-        --foreground cyan \
-        "⚔️  TRICK WEAPONS ⚔️" \
-        "" \
-        "Your Saw Cleaver has TWO forms:" \
-        "" \
-        "COMPACT FORM - Fast, less reach, bonus vs beasts" \
-        "EXTENDED FORM - Slow, greater reach, sweeping attacks" \
-        "" \
-        "Press L1 to TRANSFORM mid-combat" \
-        "Transformation attacks deal extra damage and interrupt enemies"
-    
-    echo
-    sleep 1
-    
-    slow_echo '"Each hunter finds weapons that suit their style..."'
-    echo
-    sleep 0.5
-    
-    # Show different weapon paths
-    echo "┌────────────────────────────────────────────────────────────────┐"
-    echo "│  WEAPON PATHS FOR CONSIDERATION:                              │"
-    echo "├────────────────────────────────────────────────────────────────┤"
-    echo "│                                                                │"
-    echo "│  ⚡ SKILL BUILDS                                               │"
-    echo "│     └─ Threaded Cane, Blade of Mercy, Burial Blade            │"
-    echo "│     └─ Fast, precise, relies on dodging and counters           │"
-    echo "│                                                                │"
-    echo "│  💪 STRENGTH BUILDS                                            │"
-    echo "│     └─ Kirkhammer, Hunter Axe, Whirligig Saw                   │"
-    echo "│     └─ Heavy damage, stagger enemies, slower attacks           │"
-    echo "│                                                                │"
-    echo "│  🔮 ARCANE BUILDS                                              │"
-    echo "│     └─ Tonitrus, Kos Parasite, Holy Moonlight Sword            │"
-    echo "│     └─ Elemental damage, Hunter Tools, high INT scaling        │"
-    echo "│                                                                │"
-    echo "│  🩸 BLOODTINGE BUILDS                                          │"
-    echo "│     └─ Chikage, Bloodletter, Evelyn                            │"
-    echo "│     └─ Blood damage, powerful firearms, health-cost attacks    │"
-    echo "│                                                                │"
-    echo "└────────────────────────────────────────────────────────────────┘"
-    
-    echo
-    sleep 1
-    
-    # The Doll offers a practical demonstration
-    echo
-    show_border 70
-    slow_echo '"Would you like to practice weapon transformation, Good Hunter?"'
-    echo
-    
-    # Simple practice minigame
-    CHOICE=$(gum choose "🎯 Practice transformation timing" "📚 Learn about Blood Gems" "✋ No thank you, I understand" --header "The Doll awaits your decision...")
-    
-    echo
-    echo "╭─────────────────────────────────────────────────╮"
-    echo "│ 🎯 CHOICE: $CHOICE"
-    echo "╰─────────────────────────────────────────────────╯"
-    echo
-    
-    if [[ "$CHOICE" == *"Practice"* ]]; then
-        echo
-        slow_echo "The Doll gestures to a training dummy in the workshop..."
-        echo
-        sleep 1
-        
-        slow_echo "Press [ENTER] to TRANSFORM your weapon at the right moment!"
-        echo
-        sleep 1
-        
-        # Timing challenge
-        echo "Enemy approaches..."
-        sleep 0.3
-        echo "Getting closer..."
-        sleep 0.3
-        echo "NOW!"
-        
-        read -t 1.5 -n 1
-        RESULT=$?
-        
-        echo
-        if [ $RESULT -eq 0 ]; then
-            echo "✨ PERFECT! Transformation attack connects! ✨" | pv -qL 50
-            figlet -f small "VISCERAL!"
-            ECHOES=$((ECHOES + 100))
-            echo
-            echo "Blood Echoes gained: +100"
-        else
-            echo "⚠️  Mistimed - the dummy remains standing."
-            echo "Practice makes perfect, Hunter."
-        fi
-        
-    elif [[ "$CHOICE" == *"Blood Gems"* ]]; then
-        echo
-        slow_echo "The Doll picks up a glowing gemstone..."
-        echo
-        sleep 1
-        
-        gum style --border rounded --padding "1 2" \
-            --foreground magenta \
-            "💎 BLOOD GEMS 💎" \
-            "" \
-            "Found in Chalice Dungeons and dropped by powerful foes" \
-            "" \
-            "SHAPES determine which weapons can use them:" \
-            "  • Radial (most common)" \
-            "  • Triangular (arcane weapons)" \
-            "  • Waning (rare firearms)" \
-            "  • Circle (blood-focused)" \
-            "" \
-            "EFFECTS stack and multiply:" \
-            "  +Physical Damage %, +Fire ATK, +Poison effect" \
-            "  -Durability, +Stamina cost (curses)" \
-            "" \
-            "High-tier gems can TRIPLE your weapon's damage"
-        
-        INSIGHT=$((INSIGHT + 1))
-        echo
-        echo "🌟 Insight gained: +1 (Total: $INSIGHT)"
-    fi
-    
-    echo
-    sleep 1
-    show_border 70
-    
-    echo
-    slow_echo '"Your Saw Cleaver serves you well for now..."'
-    sleep 0.5
-    slow_echo '"When you collect Blood Echoes, return here to strengthen it."'
-    echo
-    sleep 1
-    slow_echo '"Or seek new weapons in the waking world..."'
-    sleep 0.5
-    slow_echo '"The Church hides many tools from prying eyes."'
-    echo
-    
-    sleep 1
-    show_stat_bar
-    
-    echo "STATE: doll_weapons_explained"
-    echo "QUEST: paleblood_stage_4"
-    echo "INSIGHT: $INSIGHT"
-    echo "ECHOES: $ECHOES"
-    echo "STEP_COMPLETE|HP:$HP|Stamina:$STAMINA|Insight:$INSIGHT|Echoes:$ECHOES|Learned:weapon_upgrades"
-}
+    show_title
 
+    type_text "Welcome, brave traveler, to the realm of Bashonia.\nLegends speak of a hidden treasure guarded by the mighty *Shell Dragon*.\n"
+
+    type_text "You find yourself at the mouth of a dark cavern. The air is thick with the scent of ozone.\n"
+
+    type_text "A low rumble echoes from within... The Shell Dragon emerges, its scales shimmering with terminal colors.\n"
+
+    # Present choices
+    CHOICE=$(present_menu "The Encounter" \
+        "1" "Fight the dragon with your trusty script" \
+        "2" "Flee back to safety" \
+        "3" "Attempt to reason with the dragon")
+
+    case "$CHOICE" in
+        1)
+            type_text "You brandish your keyboard and launch a flurry of commands!\n"
+            type_text "The dragon snarls as your code slices through its firewall.\n"
+            HP=$((HP - 30))
+            INVENTORY+=("Dragon Scale")
+            type_text "You defeat the dragon but suffer wounds. HP is now $HP.\nYou acquire a Dragon Scale."
+            ;;
+        2)
+            type_text "You turn tail and sprint out of the cavern, heart pounding.\n"
+            HP=$((HP - 10))
+            type_text "You escape, but the dragon's fiery breath singes you. HP is now $HP."
+            ;;
+        3)
+            type_text "You raise your hands in peace and speak the ancient Bash incantation:\n"
+            type_text "\"echo 'Hello, mighty dragon!'\n\""
+            type_text "The dragon pauses, intrigued by your polite syntax.\n"
+            type_text "It grants you safe passage and a gift: a mystical .bashrc.\n"
+            INVENTORY+=(".bashrc of Wisdom")
+            type_text "Your inventory now contains: ${INVENTORY[*]}"
+            ;;
+        *)
+            type_text "You stand frozen, indecision paralyzing you. The dragon devours you."
+            HP=0
+            ;;
+    esac
+
+    # Summary
+    echo
+    echo "=== Chapter $CHAPTER Summary ==="
+    echo "HP: $HP"
+    echo "Inventory: ${INVENTORY[*]}"
+    echo "=============================="
+}
 step8
 
 # ───────────────────────────────────────────────────────────────
 # OUTPUT FROM PREVIOUS STEP:
 # ───────────────────────────────────────────────────────────────
-# Script started on 2026-01-31 11:07:59+11:00 [COMMAND="bash '/tmp/tmp.I7PP8goZoQ'" TERM="xterm-256color" TTY="/dev/pts/0" COLUMNS="126" LINES="57"]
+# Script started on 2026-01-31 11:57:00+11:00 [COMMAND="bash '/tmp/tmp.WnZvHaRNqN'" TERM="xterm-256color" TTY="/dev/pts/4" COLUMNS="126" LINES="76"]
+#      ____            _                 _          ___                  _   
+#     | __ )  __ _ ___| |__   ___  _ __ (_) __ _   / _ \ _   _  ___  ___| |_ 
+#     |  _ \ / _` / __| '_ \ / _ \| '_ \| |/ _` | | | | | | | |/ _ \/ __| __|
+#     | |_) | (_| \__ \ | | | (_) | | | | | (_| | | |_| | |_| |  __/\__ \ |_ 
+#     |____/ \__,_|___/_| |_|\___/|_| |_|_|\__,_|  \__\_\\__,_|\___||___/\__|
+#                                                                            
 # 
-# The Doll approaches the workshop table, gesturing to the array of tools...
+# Welcome, brave traveler, to the realm of Bashonia.
+# Legends speak of a hidden treasure guarded by the mighty *Shell Dragon*.
 # 
-# +--------------------------------------------------------------+
-# |              __      _____   _   ___  ___  _  _              |
-# |             \ \    / / __| /_\ | _ \/ _ \| \| |              |
-# |              \ \/\/ /| _| / _ \|  _/ (_) | .` |              |
-# |              \_/\_/ |___/_/ \_\_|  \___/|_|\_|               |
-# |                                                              |
-# |  ___ ___  ___ _____ ___ ___ ___ ___   _ _____ ___ ___  _  _  |
-# | | __/ _ \| _ \_   _|_ _| __|_ _/ __| /_\_   _|_ _/ _ \| \| | |
-# | | _| (_) |   / | |  | || _| | | (__ / _ \| |  | | (_) | .` | |
-# | |_| \___/|_|_\ |_| |___|_| |___\___/_/ \_\_| |___\___/|_|\_| |
-# |                                                              |
-# +--------------------------------------------------------------+
+# You find yourself at the mouth of a dark cavern. The air is thick with the scent of ozone.
 # 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# A low rumble echoes from within... The Shell Dragon emerges, its scales shimmering with terminal colors.
 # 
-# "Good Hunter, your weapons are extensions of your will..."
-# "They can be strengthened, transformed, enhanced."
+# [?1049h[22;0;0t[1;76r[4l[?25l(B[1;76r
 # 
-# ]11;?\[6n                                                                
-# ╭──────────────────────────────────────────────────────────────╮
-# │                                                              │
-# │  🔨 WEAPON FORTIFICATION SYSTEM 🔨                           │
-# │                                                              │
-# │  Blood Echoes are currency - earned from slain beasts        │
-# │  Blood Stone Shards strengthen weapons (+1 to +3)            │
-# │  Twin Blood Stone Shards for further enhancement (+4 to +6)  │
-# │  Blood Stone Chunks for powerful weapons (+7 to +9)          │
-# │  Blood Rock - the rarest material - reaches +10              │
-# │                                                              │
-# │  Each upgrade increases damage, scaling, and durability      │
-# │                                                              │
-# ╰──────────────────────────────────────────────────────────────╯
-#                                                                 
+# ┌────────────────────┤ The Encounter ├─────────────────────┐│ Choose your destiny:                                     │ │                                                          │ │        1 Fight the dragon with your trusty script        │ │        2 Flee back to safety                             │ │        3 Attempt to reason with the dragon               │ │                                                          │ │                                                          │ │                                                          │ │                                                          │ │                                                          │ │                                                          │ │              <Ok>                  <Cancel>              │ │                                                          │ └──────────────────────────────────────────────────────────┘                                                             1 Fight the dragon with your trusty script2 Flee back to safety                     2 Flee back to safety                     3 Attempt to reason with the dragon       [A2 Flee back to safety                     3 Attempt to reason with the dragon       [A1 Fight the dragon with your trusty script2 Flee back to safety                     [?12l[?25h(B[?1049l[23;0;0tYou brandish your keyboard and launch a flurry of commands!
 # 
-# "Blood Gems can also be slotted into fortified weapons..."
-# "They grant special properties: fire, bolt, arcane, poison..."
+# The dragon snarls as your code slices through its firewall.
 # 
-# ]11;?\[6n                                                                    
-# ╔══════════════════════════════════════════════════════════════════╗
-# ║                                                                  ║
-# ║  ⚔️  TRICK WEAPONS ⚔️                                            ║
-# ║                                                                  ║
-# ║  Your Saw Cleaver has TWO forms:                                 ║
-# ║                                                                  ║
-# ║  COMPACT FORM - Fast, less reach, bonus vs beasts                ║
-# ║  EXTENDED FORM - Slow, greater reach, sweeping attacks           ║
-# ║                                                                  ║
-# ║  Press L1 to TRANSFORM mid-combat                                ║
-# ║  Transformation attacks deal extra damage and interrupt enemies  ║
-# ║                                                                  ║
-# ╚══════════════════════════════════════════════════════════════════╝
-#                                                                     
+# You defeat the dragon but suffer wounds. HP is now 70.
+# You acquire a Dragon Scale.
 # 
-# "Each hunter finds weapons that suit their style..."
+# === Chapter 1 Summary ===
+# HP: 70
+# Inventory: Dragon Scale
+# ==============================
 # 
-# ┌────────────────────────────────────────────────────────────────┐
-# │  WEAPON PATHS FOR CONSIDERATION:                              │
-# ├────────────────────────────────────────────────────────────────┤
-# │                                                                │
-# │  ⚡ SKILL BUILDS                                               │
-# │     └─ Threaded Cane, Blade of Mercy, Burial Blade            │
-# │     └─ Fast, precise, relies on dodging and counters           │
-# │                                                                │
-# │  💪 STRENGTH BUILDS                                            │
-# │     └─ Kirkhammer, Hunter Axe, Whirligig Saw                   │
-# │     └─ Heavy damage, stagger enemies, slower attacks           │
-# │                                                                │
-# │  🔮 ARCANE BUILDS                                              │
-# │     └─ Tonitrus, Kos Parasite, Holy Moonlight Sword            │
-# │     └─ Elemental damage, Hunter Tools, high INT scaling        │
-# │                                                                │
-# │  🩸 BLOODTINGE BUILDS                                          │
-# │     └─ Chikage, Bloodletter, Evelyn                            │
-# │     └─ Blood damage, powerful firearms, health-cost attacks    │
-# │                                                                │
-# └────────────────────────────────────────────────────────────────┘
-# 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# "Would you like to practice weapon transformation, Good Hunter?"
-# 
-# [?25l[?2004hThe Doll awaits your decision...   
-# > 🎯 Practice transformation timing
-#   📚 Learn about Blood Gems        
-#   ✋ No thank you, I understand    
-#                                    
-# ←↓↑→ navigate • enter submit       [126D[6A
-#   🎯 Practice transformation timing
-# > 📚 Learn about Blood Gems        
-# 
-# [126D[6A
-# 
-#   📚 Learn about Blood Gems        
-# > ✋ No thank you, I understand    
-# 
-# [126D[6A [126D[?2004l[?25h[?1002l[?1003l[?1006l
-# ╭─────────────────────────────────────────────────╮
-# │ 🎯 CHOICE: ✋ No thank you, I understand
-# ╰─────────────────────────────────────────────────╯
-# 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 
-# "Your Saw Cleaver serves you well for now..."
-# "When you collect Blood Echoes, return here to strengthen it."
-# 
-# "Or seek new weapons in the waking world..."
-# "The Church hides many tools from prying eyes."
-# 
-# ╭───────────────────────────────────────────────────────────────────────╮
-# │ ❤️  HP: 100/100 | ⚡ Stamina: 100/100 | 👁️  Insight: 5 | 🩸 Echoes: 0 │
-# │ 🎒 Inventory: Saw Cleaver, Hunter Pistol, 3x Blood Vials                 │
-# │ 📍 Location: Hunter's Dream                                              │
-# ╰───────────────────────────────────────────────────────────────────────╯
-# 
-# STATE: doll_weapons_explained
-# QUEST: paleblood_stage_4
-# INSIGHT: 5
-# ECHOES: 0
-# STEP_COMPLETE|HP:100|Stamina:100|Insight:5|Echoes:0|Learned:weapon_upgrades
-# 
-# Script done on 2026-01-31 11:09:30+11:00 [COMMAND_EXIT_CODE="0"]
+# Script done on 2026-01-31 11:57:21+11:00 [COMMAND_EXIT_CODE="0"]
 
 # ═══════════════════════════════════════════════════════════════
-# STEP 9: Continue adventure - enter Yharnam for the hunt
-# Generated: 2026-01-31 11:09:59 | FINAL: false
+# STEP 9: Continue the Bashonia adventure with a dramatic scene, present choices, and update hero state
+# Generated: 2026-01-31 11:57:24 | FINAL: false
 # ═══════════════════════════════════════════════════════════════
-step9() {
-    # State persistence
-    HP=100
-    MAX_HP=100
-    STAMINA=100
-    MAX_STAMINA=100
-    INSIGHT=5
-    ECHOES=0
-    LOCATION="Central_Yharnam"
-    
-    clear
-    
-    # Dramatic transition from Dream to Yharnam
-    echo ""
-    figlet -f slant "The Hunt Begins" | boxes -d stone -p a1l2
-    echo ""
-    sleep 1
-    
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | pv -qL 200
-    echo ""
-    
-    echo "You awaken in the waking world..." | pv -qL 40
-    sleep 0.5
-    echo "The Dream fades like mist..." | pv -qL 40
-    sleep 1
-    
-    # Atmospheric arrival
-    cat << 'EOF' | pv -qL 60
-
-    The cobblestones are slick with rain and... something darker.
-    Gas lamps flicker, casting dancing shadows on Gothic architecture.
-    The air reeks of blood, incense, and burning.
-    
-    Somewhere in the distance, a bell tolls.
-    
-    This is Yharnam - the city of blood ministration.
-    Once a beacon of healing, now a nightmare of transformation.
-    
-EOF
-    sleep 1
-    
-    # Location reveal with ASCII art
-    boxes -d peek << 'EOF'
-╔═══════════════════════════════════════════════════════════╗
-║                                                           ║
-║           CENTRAL YHARNAM - NIGHT OF THE HUNT             ║
-║                                                           ║
-║  A narrow street winds between crumbling buildings.       ║
-║  Overturned carts and abandoned goods litter the path.    ║
-║  Windows are barred, doors sealed with crimson marks.     ║
-║                                                           ║
-║  The citizens know to hide on this night...               ║
-║  But not all of them succeeded in their transformation.   ║
-║                                                           ║
-╚═══════════════════════════════════════════════════════════╝
-EOF
-    echo ""
-    sleep 1
-    
-    # First enemy encounter setup
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | pv -qL 200
-    echo ""
-    echo "A sound... shambling footsteps..." | pv -qL 40
-    sleep 1
-    echo ""
-    
-    cat << 'EOF' | pv -qL 50
-    From the shadows emerges a HUNTSMAN - once human, now twisted.
-    His face is gaunt, eyes yellowed and wild with bloodlust.
-    He clutches a crude pitchfork, knuckles white with desperate strength.
-    
-    He SEES you.
-    
-    "Beast... hunter... BLOOD!" he shrieks, voice breaking.
-    
-EOF
-    sleep 1
-    
-    # Enemy stats display
-    gum style \
-        --border double \
-        --border-foreground 196 \
-        --padding "1 2" \
-        --margin "1 0" \
-        "⚠️  ENEMY ENCOUNTERED ⚠️" \
-        "" \
-        "HUNTSMAN (Rabid)" \
-        "HP: 40/40" \
-        "Threat: Low" \
-        "" \
-        "Attacks: Pitchfork thrust, wild swipe" \
-        "Weakness: Slow, vulnerable after attacks"
-    
-    echo ""
-    
-    # Player status
-    gum style \
-        --border rounded \
-        --border-foreground 46 \
-        --padding "0 2" \
-        "❤️  HP: $HP/$MAX_HP | ⚡ Stamina: $STAMINA/$MAX_STAMINA | 👁️  Insight: $INSIGHT | 🩸 Echoes: $ECHOES"
-    
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    
-    # Combat tutorial choice
-    CHOICE=$(gum choose \
-        "⚔️  Attack with Saw Cleaver (compact form)" \
-        "🔄 Transform weapon and attack (extended form)" \
-        "🔫 Shoot to stagger, then visceral attack" \
-        "🛡️  Dodge and observe his pattern" \
-        "🏃 Attempt to run past")
-    
-    echo ""
-    gum style --border rounded --padding "0 1" "🎯 CHOICE: $CHOICE"
-    echo ""
-    
-    echo "STATE: first_combat_encounter"
-    echo "QUEST: paleblood_stage_5"
-    echo "ENEMY: huntsman_rabid"
-    echo "ENEMY_HP: 40"
-    echo "STEP_COMPLETE|HP:$HP|Stamina:$STAMINA|Insight:$INSIGHT|Echoes:$ECHOES|Location:$LOCATION|Combat:initiated"
+# Global state (persisted across steps)
+HP=${HP:-70}
+INVENTORY=(${INVENTORY[@]:-Dragon\ Scale})
+CHAPTER=${CHAPTER:-1}
+# Helper: slow typewriter effect
+slow_echo() {
+    local text="$1"
+    echo -e "$text" | pv -qL 30
 }
-
+# Helper: display hero status in a box
+display_status() {
+    local status="🗡️  HP: $HP   📦 Inventory: ${INVENTORY[*]}"
+    boxes -d double -p a <<<"$status"
+}
+# Helper: present choices using gum
+choose_action() {
+    gum choose \
+        "🔎 Explore deeper into the cavern" \
+        "🛏️ Rest at the safe nook (heal 20 HP)" \
+        "🔮 Inspect the Dragon Scale"
+}
+# Main scene
+step9() {
+    clear
+    # Intro art
+    figlet -c "Chapter $((CHAPTER+1))"
+    echo
+    slow_echo "The cavern walls glimmer with phosphorescent moss, casting eerie shadows.\n"
+    slow_echo "A faint, rhythmic drumming echoes from the darkness ahead, as if some ancient heart beats within the stone.\n"
+    slow_echo "You feel the weight of the Dragon Scale against your chest, its surface still warm from the battle.\n"
+    echo
+    display_status
+    echo
+    # Prompt user
+    ACTION=$(choose_action)
+    echo
+    case "$ACTION" in
+        "🔎 Explore deeper into the cavern")
+            slow_echo "\nYou venture further, your footsteps echoing.\n"
+            sleep 1
+            slow_echo "Suddenly, a hidden alcove reveals a chest pulsing with a soft golden light.\n"
+            INVENTORY+=("Golden Chest")
+            slow_echo "You obtain a *Golden Chest*! It might contain something valuable.\n"
+            ;;
+        "🛏️ Rest at the safe nook (heal 20 HP)")
+            slow_echo "\nYou find a cozy nook, its walls lined with soft moss.\n"
+            sleep 1
+            ((HP+=20))
+            ((HP>100)) && HP=100
+            slow_echo "You rest for a while, feeling your wounds mend. (+20 HP)\n"
+            ;;
+        "🔮 Inspect the Dragon Scale")
+            slow_echo "\nYou hold the Dragon Scale up to the dim light.\n"
+            sleep 1
+            slow_echo "Its iridescent surface shimmers, revealing faint runes.\n"
+            slow_echo "The runes whisper a secret: *'Only the brave may claim the treasure beyond the fire.'*\n"
+            ;;
+    esac
+    echo
+    # Update chapter and show status
+    ((CHAPTER++))
+    display_status
+    echo
+    slow_echo "\n--- End of Chapter $CHAPTER ---\n"
+}
 step9
 
 # ───────────────────────────────────────────────────────────────
 # OUTPUT FROM PREVIOUS STEP:
 # ───────────────────────────────────────────────────────────────
-# Script started on 2026-01-31 11:09:59+11:00 [COMMAND="bash '/tmp/tmp.5Rembz0FtQ'" TERM="xterm-256color" TTY="/dev/pts/0" COLUMNS="126" LINES="57"]
+# Script started on 2026-01-31 11:57:24+11:00 [COMMAND="bash '/tmp/tmp.UDYdVrEold'" TERM="xterm-256color" TTY="/dev/pts/4" COLUMNS="126" LINES="76"]
+#                    ____ _                 _              ____  
+#                   / ___| |__   __ _ _ __ | |_ ___ _ __  |___ \ 
+#                  | |   | '_ \ / _` | '_ \| __/ _ \ '__|   __) |
+#                  | |___| | | | (_| | |_) | ||  __/ |     / __/ 
+#                   \____|_| |_|\__,_| .__/ \__\___|_|    |_____|
+#                                    |_|                         
 # 
-# +-------------------------------------------------------------------------------+
-# |                                                                               |
-# |    ________            __  __            __     ____             _            |
-# |   /_  __/ /_  ___     / / / /_  ______  / /_   / __ )___  ____ _(_)___  _____ |
-# |    / / / __ \/ _ \   / /_/ / / / / __ \/ __/  / __  / _ \/ __ `/ / __ \/ ___/ |
-# |   / / / / / /  __/  / __  / /_/ / / / / /_   / /_/ /  __/ /_/ / / / / (__  )  |
-# |  /_/ /_/ /_/\___/  /_/ /_/\__,_/_/ /_/\__/  /_____/\___/\__, /_/_/ /_/____/   |
-# |                                                        /____/                 |
-# |                                                                               |
-# +-------------------------------------------------------------------------------+
+# The cavern walls glimmer with phosphorescent moss, casting eerie shadows.
 # 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# A faint, rhythmic drumming echoes from the darkness ahead, as if some ancient heart beats within the stone.
 # 
-# You awaken in the waking world...
-# The Dream fades like mist...
+# You feel the weight of the Dragon Scale against your chest, its surface still warm from the battle.
 # 
-#     The cobblestones are slick with rain and... something darker.
-#     Gas lamps flicker, casting dancing shadows on Gothic architecture.
-#     The air reeks of blood, incense, and burning.
-#     
-#     Somewhere in the distance, a bell tolls.
-#     
-#     This is Yharnam - the city of blood ministration.
-#     Once a beacon of healing, now a nightmare of transformation.
-#     
-# /*       _\|/_
-#          (o o)
-#  +----oOO-{_}-OOo------------------------------------------------+
-#  | ╔═══════════════════════════════════════════════════════════╗ |
-#  | ║                                                           ║ |
-#  | ║           CENTRAL YHARNAM - NIGHT OF THE HUNT             ║ |
-#  | ║                                                           ║ |
-#  | ║  A narrow street winds between crumbling buildings.       ║ |
-#  | ║  Overturned carts and abandoned goods litter the path.    ║ |
-#  | ║  Windows are barred, doors sealed with crimson marks.     ║ |
-#  | ║                                                           ║ |
-#  | ║  The citizens know to hide on this night...               ║ |
-#  | ║  But not all of them succeeded in their transformation.   ║ |
-#  | ║                                                           ║ |
-#  | ╚═══════════════════════════════════════════════════════════╝ |
-#  +--------------------------------------------------------------*/
+# boxes: invalid padding specification - a
 # 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# [?25l[?2004hChoose:                                
+# > 🔎 Explore deeper into the cavern    
+#   🛏️ Rest at the safe nook (heal 20 HP)
+#   🔮 Inspect the Dragon Scale          
+#                                        
+# ←↓↑→ navigate • enter submit           [126D[6A
+#   🔎 Explore deeper into the cavern    
+# > 🛏️ Rest at the safe nook (heal 20 HP)
 # 
-# A sound... shambling footsteps...
+# [126D[6A
 # 
-#     From the shadows emerges a HUNTSMAN - once human, now twisted.
-#     His face is gaunt, eyes yellowed and wild with bloodlust.
-#     He clutches a crude pitchfork, knuckles white with desperate strength.
-#     
-#     He SEES you.
-#     
-#     "Beast... hunter... BLOOD!" he shrieks, voice breaking.
-#     
-# ]11;?\[6n                                              
-# ╔════════════════════════════════════════════╗
-# ║                                            ║
-# ║  ⚠️  ENEMY ENCOUNTERED ⚠️                  ║
-# ║                                            ║
-# ║  HUNTSMAN (Rabid)                          ║
-# ║  HP: 40/40                                 ║
-# ║  Threat: Low                               ║
-# ║                                            ║
-# ║  Attacks: Pitchfork thrust, wild swipe     ║
-# ║  Weakness: Slow, vulnerable after attacks  ║
-# ║                                            ║
-# ╚════════════════════════════════════════════╝
-#                                               
+#   🛏️ Rest at the safe nook (heal 20 HP)
+# > 🔮 Inspect the Dragon Scale          
 # 
-# ]11;?\[6n╭─────────────────────────────────────────────────────────────────────────╮
-# │  ❤️  HP: 100/100 | ⚡ Stamina: 100/100 | 👁️  Insight: 5 | 🩸 Echoes: 0  │
-# ╰─────────────────────────────────────────────────────────────────────────╯
+# [126D[6A [126D[?2004l[?25h[?1002l[?1003l[?1006l
 # 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# You hold the Dragon Scale up to the dim light.
 # 
-# [?25l[?2004hChoose:                                         
-# > ⚔️  Attack with Saw Cleaver (compact form)    
-#   🔄 Transform weapon and attack (extended form)
-#   🔫 Shoot to stagger, then visceral attack     
-#   🛡️  Dodge and observe his pattern             
-#   🏃 Attempt to run past                        
-#                                                 
-# ←↓↑→ navigate • enter submit                    [126D[8AChoose:                                         
-# > ⚔️  Attack with Saw Cleaver (compact form)    
-#   🔄 Transform weapon and attack (extended form)
-#   🔫 Shoot to stagger, then visceral attack     
-#   🛡️  Dodge and observe his pattern             
-#   🏃 Attempt to run past                        
-#                                                 
-# ←↓↑→ navigate • enter submit                    [126D[8AChoose:                                         
-# > ⚔️  Attack with Saw Cleaver (compact form)    
-#   🔄 Transform weapon and attack (extended form)
-#   🔫 Shoot to stagger, then visceral attack     
-#   🛡️  Dodge and observe his pattern             
-#   🏃 Attempt to run past                        
-#                                                 
-# ←↓↑→ navigate • enter submit                    [126D[8AChoose:                                         
-# > ⚔️  Attack with Saw Cleaver (compact form)    
-#   🔄 Transform weapon and attack (extended form)
-#   🔫 Shoot to stagger, then visceral attack     
-#   🛡️  Dodge and observe his pattern             
-#   🏃 Attempt to run past                        
-#                                                 
-# ←↓↑→ navigate • enter submit                    [126D[8AChoose:                                         
-# > ⚔️  Attack with Saw Cleaver (compact form)    
-#   🔄 Transform weapon and attack (extended form)
-#   🔫 Shoot to stagger, then visceral attack     
-#   🛡️  Dodge and observe his pattern             
-#   🏃 Attempt to run past                        
-#                                                 
-# ←↓↑→ navigate • enter submit                    [126D[8AChoose:                                         
-# > ⚔️  Attack with Saw Cleaver (compact form)    
-#   🔄 Transform weapon and attack (extended form)
-#   🔫 Shoot to stagger, then visceral attack     
-#   🛡️  Dodge and observe his pattern             
-#   🏃 Attempt to run past                        
-#                                                 
-# ←↓↑→ navigate • enter submit                    [126D[8AChoose:                                         
-# > ⚔️  Attack with Saw Cleaver (compact form)    
-#   🔄 Transform weapon and attack (extended form)
-#   🔫 Shoot to stagger, then visceral attack     
-#   🛡️  Dodge and observe his pattern             
-#   🏃 Attempt to run past                        
-#                                                 
-# ←↓↑→ navigate • enter submit                    [126D[8AChoose:                                         
-# > ⚔️  Attack with Saw Cleaver (compact form)    
-#   🔄 Transform weapon and attack (extended form)
-#   🔫 Shoot to stagger, then visceral attack     
-#   🛡️  Dodge and observe his pattern             
-#   🏃 Attempt to run past                        
-#                                                 
-# ←↓↑→ navigate • enter submit                    [126D[8AChoose:                                         
-# > ⚔️  Attack with Saw Cleaver (compact form)    
-#   🔄 Transform weapon and attack (extended form)
-#   🔫 Shoot to stagger, then visceral attack     
-#   🛡️  Dodge and observe his pattern             
-#   🏃 Attempt to run past                        
-#                                                 
-# ←↓↑→ navigate • enter submit                    [126D[8AChoose:                                         
-# > ⚔️  Attack with Saw Cleaver (compact form)    
-#   🔄 Transform weapon and attack (extended form)
-#   🔫 Shoot to stagger, then visceral attack     
-#   🛡️  Dodge and observe his pattern             
-#   🏃 Attempt to run past                        
-#                                                 
-# ←↓↑→ navigate • enter submit                    [126D[8AChoose:                                         
-# > ⚔️  Attack with Saw Cleaver (compact form)    
-#   🔄 Transform weapon and attack (extended form)
-#   🔫 Shoot to stagger, then visceral attack     
-#   🛡️  Dodge and observe his pattern             
-#   🏃 Attempt to run past                        
-#                                                 
-# ←↓↑→ navigate • enter submit                    [126D[8AChoose:                                         
-# > ⚔️  Attack with Saw Cleaver (compact form)    
-#   🔄 Transform weapon and attack (extended form)
-#   🔫 Shoot to stagger, then visceral attack     
-#   🛡️  Dodge and observe his pattern             
-#   🏃 Attempt to run past                        
-#                                                 
-# ←↓↑→ navigate • enter submit                    [126D[8AChoose:                                         
-# > ⚔️  Attack with Saw Cleaver (compact form)    
-#   🔄 Transform weapon and attack (extended form)
-#   🔫 Shoot to stagger, then visceral attack     
-#   🛡️  Dodge and observe his pattern             
-#   🏃 Attempt to run past                        
-#                                                 
-# ←↓↑→ navigate • enter submit                    [126D[8AChoose:                                         
-# > ⚔️  Attack with Saw Cleaver (compact form)    
-#   🔄 Transform weapon and attack (extended form)
-#   🔫 Shoot to stagger, then visceral attack     
-#   🛡️  Dodge and observe his pattern             
-#   🏃 Attempt to run past                        
-#                                                 
-# ←↓↑→ navigate • enter submit                    [126D[8AChoose:                                         
-# > ⚔️  Attack with Saw Cleaver (compact form)    
-#   🔄 Transform weapon and attack (extended form)
-#   🔫 Shoot to stagger, then visceral attack     
-#   🛡️  Dodge and observe his pattern             
-#   🏃 Attempt to run past                        
-#                                                 
-# ←↓↑→ navigate • enter submit                    [126D[8AChoose:                                         
-# > ⚔️  Attack with Saw Cleaver (compact form)    
-#   🔄 Transform weapon and attack (extended form)
-#   🔫 Shoot to stagger, then visceral attack     
-#   🛡️  Dodge and observe his pattern             
-#   🏃 Attempt to run past                        
-#                                                 
-# ←↓↑→ navigate • enter submit                    [126D[8AChoose:                                         
-# > ⚔️  Attack with Saw Cleaver (compact form)    
-#   🔄 Transform weapon and attack (extended form)
-#   🔫 Shoot to stagger, then visceral attack     
-#   🛡️  Dodge and observe his pattern             
-#   🏃 Attempt to run past                        
-#                                                 
-# ←↓↑→ navigate • enter submit                    [126D[8AChoose:                                         
-# > ⚔️  Attack with Saw Cleaver (compact form)    
-#   🔄 Transform weapon and attack (extended form)
-#   🔫 Shoot to stagger, then visceral attack     
-#   🛡️  Dodge and observe his pattern             
-#   🏃 Attempt to run past                        
-#                                                 
-# ←↓↑→ navigate • enter submit                    [126D[8A
-#   ⚔️  Attack with Saw Cleaver (compact form)    
-# > 🔄 Transform weapon and attack (extended form)
+# Its iridescent surface shimmers, revealing faint runes.
 # 
-# [126D[8A [126D[?2004l[?25h[?1002l[?1003l[?1006l
-# ]11;?\[6n╭───────────────────────────────────────────────────────────╮
-# │ 🎯 CHOICE: 🔄 Transform weapon and attack (extended form) │
-# ╰───────────────────────────────────────────────────────────╯
+# The runes whisper a secret: *'Only the brave may claim the treasure beyond the fire.'*
 # 
-# STATE: first_combat_encounter
-# QUEST: paleblood_stage_5
-# ENEMY: huntsman_rabid
-# ENEMY_HP: 40
-# STEP_COMPLETE|HP:100|Stamina:100|Insight:5|Echoes:0|Location:Central_Yharnam|Combat:initiated
+# boxes: invalid padding specification - a
 # 
-# Script done on 2026-01-31 11:12:54+11:00 [COMMAND_EXIT_CODE="0"]
+# --- End of Chapter 2 ---
+# 
+# Script done on 2026-01-31 11:57:47+11:00 [COMMAND_EXIT_CODE="0"]
 
 # ═══════════════════════════════════════════════════════════════
-# STEP 10: Resolve combat with transformed weapon attack
-# Generated: 2026-01-31 11:13:27 | FINAL: false
+# STEP 10: Chapter 3 – Ember Hall, present choices and update state
+# Generated: 2026-01-31 11:57:51 | FINAL: false
 # ═══════════════════════════════════════════════════════════════
-step10() {
-    clear
-    
-    # Combat result - transformed weapon does more damage
-    local damage=$((25 + RANDOM % 10))
-    local enemy_hp=$((40 - damage))
-    local stamina_cost=30
-    local new_stamina=$((100 - stamina_cost))
-    
-    # Animation: weapon transformation
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | pv -qL 200
-    echo ""
-    sleep 0.3
-    
-    echo "    You grip the Saw Cleaver's handle and TWIST..." | pv -qL 40
-    sleep 0.4
-    echo "    *CLACK-SHHHHHING*" | pv -qL 30
-    sleep 0.3
-    echo ""
-    echo "    The weapon EXTENDS with mechanical precision," | pv -qL 40
-    sleep 0.2
-    echo "    revealing its true form - a vicious serrated blade" | pv -qL 40
-    sleep 0.2
-    echo "    nearly as long as you are tall." | pv -qL 40
-    sleep 0.5
-    
-    echo ""
-    boxes -d stone -p a1l2r2 <<EOF
- WEAPON TRANSFORMED 
- Saw Cleaver (Extended Form)
- +Reach  +Damage  -Speed
-EOF
-    echo ""
-    sleep 0.6
-    
-    # Attack sequence
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    echo "    The Huntsman lunges forward with his pitchfork—" | pv -qL 45
-    sleep 0.3
-    echo "    But you're FASTER." | pv -qL 35
-    sleep 0.4
-    echo ""
-    echo "    You sidestep left and bring the extended blade around" | pv -qL 45
-    sleep 0.3
-    echo "    in a devastating horizontal arc!" | pv -qL 40
-    sleep 0.5
-    
-    echo ""
-    figlet -f small "SLASH!"
-    echo ""
-    sleep 0.4
-    
-    echo "    The serrated edge TEARS through the Huntsman's torso," | pv -qL 45
-    sleep 0.3
-    echo "    spraying dark blood across the cobblestones." | pv -qL 42
-    sleep 0.4
-    echo ""
-    echo "    He staggers back, clutching the wound, howling in rage and pain!" | pv -qL 45
-    sleep 0.6
-    
-    # Damage display
-    echo ""
-    gum style --border double --border-foreground 196 --padding "0 2" --margin "1 0" \
-        "💥 CRITICAL HIT: ${damage} damage!" \
-        "   Huntsman HP: 40 → ${enemy_hp}"
-    echo ""
-    sleep 0.5
-    
-    # Enemy counterattack
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    echo "    \"AAAARGH! BEAST!\" he screams." | pv -qL 40
-    sleep 0.4
-    echo ""
-    echo "    Maddened by pain, he swings wildly with the pitchfork!" | pv -qL 45
-    sleep 0.3
-    echo "    One prong catches your shoulder - a glancing blow." | pv -qL 45
-    sleep 0.5
-    
-    local enemy_damage=12
-    local player_hp=$((100 - enemy_damage))
-    
-    echo ""
-    gum style --border rounded --border-foreground 214 --padding "0 1" \
-        "⚠️  You take ${enemy_damage} damage"
-    echo ""
-    sleep 0.5
-    
-    # Current status
-    echo "╭─────────────────────────────────────────────────────────────────────────╮"
-    echo "│  ❤️  HP: ${player_hp}/100 | ⚡ Stamina: ${new_stamina}/100 | 👁️  Insight: 5 | 🩸 Echoes: 0  │"
-    echo "╰─────────────────────────────────────────────────────────────────────────╯"
-    echo ""
-    
-    # Enemy status
-    if [ $enemy_hp -le 10 ]; then
-        echo "╔════════════════════════════════════════════╗"
-        echo "║  HUNTSMAN (Rabid) - CRITICALLY WOUNDED     ║"
-        echo "║  HP: ${enemy_hp}/40                               ║"
-        echo "║  Status: Bleeding, barely standing         ║"
-        echo "╚════════════════════════════════════════════╝"
-    else
-        echo "╔════════════════════════════════════════════╗"
-        echo "║  HUNTSMAN (Rabid) - WOUNDED                ║"
-        echo "║  HP: ${enemy_hp}/40                               ║"
-        echo "║  Status: Enraged, desperate                ║"
-        echo "╚════════════════════════════════════════════╝"
-    fi
-    echo ""
-    sleep 0.5
-    
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    
-    # Next action choice
-    local choice=$(gum choose \
-        "⚔️  Finish him with a quick strike" \
-        "🔫 Shoot to stagger, then visceral attack (high damage, uses bullet)" \
-        "🛡️  Dodge back and wait for opening" \
-        "💊 Use Blood Vial to heal (restores 40% HP)")
-    
-    echo ""
-    gum style --border double --border-foreground 33 --padding "0 2" \
-        "🎯 CHOICE: $choice"
-    echo ""
-    
-    # Output state for next iteration
-    echo "STATE: combat_huntsman_round2"
-    echo "PLAYER_HP: $player_hp"
-    echo "PLAYER_STAMINA: $new_stamina"
-    echo "ENEMY_HP: $enemy_hp"
-    echo "WEAPON: saw_cleaver_extended"
-    echo "CHOICE: $choice"
-    echo "STEP_COMPLETE"
+# Global state (persist across steps)
+: "${HP:=100}"
+: "${CHAPTER:=2}"
+: "${INVENTORY:=()}"   # bash array
+
+# Helper: slow text reveal (uses pv if available, falls back to echo)
+display_text() {
+  if command -v pv >/dev/null; then
+    echo -e "$1" | pv -qL 30
+  else
+    echo -e "$1"
+  fi
 }
-step10
 
-# ───────────────────────────────────────────────────────────────
-# OUTPUT FROM PREVIOUS STEP:
-# ───────────────────────────────────────────────────────────────
-# Script started on 2026-01-31 11:13:27+11:00 [COMMAND="bash '/tmp/tmp.9n4fqRQaHN'" TERM="xterm-256color" TTY="/dev/pts/0" COLUMNS="126" LINES="76"]
-# 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 
-#     You grip the Saw Cleaver's handle and TWIST...
-#     *CLACK-SHHHHHING*
-# 
-#     The weapon EXTENDS with mechanical precision,
-#     revealing its true form - a vicious serrated blade
-#     nearly as long as you are tall.
-# 
-#  +-------------------------------+
-#  |                               |
-#  |  WEAPON TRANSFORMED           |
-#  |  Saw Cleaver (Extended Form)  |
-#  |  +Reach  +Damage  -Speed      |
-#  |                               |
-#  +-------------------------------+
-# 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 
-#     The Huntsman lunges forward with his pitchfork—
-#     But you're FASTER.
-# 
-#     You sidestep left and bring the extended blade around
-#     in a devastating horizontal arc!
-# 
-#  ___ _      _   ___ _  _ _ 
-# / __| |    /_\ / __| || | |
-# \__ \ |__ / _ \\__ \ __ |_|
-# |___/____/_/ \_\___/_||_(_)
-#                            
-# 
-#     The serrated edge TEARS through the Huntsman's torso,
-#     spraying dark blood across the cobblestones.
-# 
-#     He staggers back, clutching the wound, howling in rage and pain!
-# 
-# ]11;?\[6n                                 
-# ╔═══════════════════════════════╗
-# ║  💥 CRITICAL HIT: 34 damage!  ║
-# ║     Huntsman HP: 40 → 6       ║
-# ╚═══════════════════════════════╝
-#                                  
-# 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 
-#     "AAAARGH! BEAST!" he screams.
-# 
-#     Maddened by pain, he swings wildly with the pitchfork!
-#     One prong catches your shoulder - a glancing blow.
-# 
-# ]11;?\[6n╭────────────────────────╮
-# │ ⚠️  You take 12 damage │
-# ╰────────────────────────╯
-# 
-# ╭─────────────────────────────────────────────────────────────────────────╮
-# │  ❤️  HP: 88/100 | ⚡ Stamina: 70/100 | 👁️  Insight: 5 | 🩸 Echoes: 0  │
-# ╰─────────────────────────────────────────────────────────────────────────╯
-# 
-# ╔════════════════════════════════════════════╗
-# ║  HUNTSMAN (Rabid) - CRITICALLY WOUNDED     ║
-# ║  HP: 6/40                               ║
-# ║  Status: Bleeding, barely standing         ║
-# ╚════════════════════════════════════════════╝
-# 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 
-# [?25l[?2004hChoose:                                                               
-# > ⚔️  Finish him with a quick strike                                  
-#   🔫 Shoot to stagger, then visceral attack (high damage, uses bullet)
-#   🛡️  Dodge back and wait for opening                                 
-#   💊 Use Blood Vial to heal (restores 40% HP)                         
-#                                                                       
-# ←↓↑→ navigate • enter submit                                          [126D[7A
-#   ⚔️  Finish him with a quick strike                                  
-# > 🔫 Shoot to stagger, then visceral attack (high damage, uses bullet)
-# 
-# [126D[7A [126D[?2004l[?25h[?1002l[?1003l[?1006l
-# ]11;?\[6n╔═══════════════════════════════════════════════════════════════════════════════════╗
-# ║  🎯 CHOICE: 🔫 Shoot to stagger, then visceral attack (high damage, uses bullet)  ║
-# ╚═══════════════════════════════════════════════════════════════════════════════════╝
-# 
-# STATE: combat_huntsman_round2
-# PLAYER_HP: 88
-# PLAYER_STAMINA: 70
-# ENEMY_HP: 6
-# WEAPON: saw_cleaver_extended
-# CHOICE: 🔫 Shoot to stagger, then visceral attack (high damage, uses bullet)
-# STEP_COMPLETE
-# 
-# Script done on 2026-01-31 11:16:17+11:00 [COMMAND_EXIT_CODE="0"]
+# Helper: show current status
+show_status() {
+  echo -e "\n\033[1;33m[Status]\033[0m HP: $HP"
+  if ((${#INVENTORY[@]})); then
+    echo -e "Inventory: ${INVENTORY[*]}"
+  else
+    echo -e "Inventory: (empty)"
+  fi
+  echo
+}
 
-# ═══════════════════════════════════════════════════════════════
-# STEP 11: Execute visceral attack finishing move with dramatic payoff
-# Generated: 2026-01-31 11:16:53 | FINAL: true
-# ═══════════════════════════════════════════════════════════════
-step11() {
-    # Parse previous state
-    PLAYER_HP=88
-    PLAYER_STAMINA=70
-    PLAYER_BULLETS=5
-    PLAYER_INSIGHT=5
-    PLAYER_ECHOES=0
-    ENEMY_HP=6
-    
-    clear
-    
-    echo ""
-    boxes -d stone <<EOF
-   THE HUNT ENDS
-EOF
-    echo ""
-    sleep 1
-    
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | pv -qL 200
-    echo ""
-    
-    echo "    You raise your pistol with steady precision..." | pv -qL 40
-    sleep 0.5
-    echo ""
-    echo "    The Huntsman staggers toward you, pitchfork raised—" | pv -qL 40
-    sleep 0.5
-    echo ""
-    
-    # Gunshot effect
-    echo -e "    \033[1;33m*BANG*\033[0m" | pv -qL 20
-    sleep 0.3
-    figlet -f small "BANG!"
-    echo ""
-    sleep 0.5
-    
-    echo "    The bullet strikes true, shattering his guard!" | pv -qL 40
-    echo "    He drops to one knee, defenseless, staggered..." | pv -qL 40
-    sleep 0.8
-    echo ""
-    
-    gum style --border double --padding "1 2" --border-foreground 214 "⚡ ENEMY STAGGERED - VISCERAL WINDOW OPEN ⚡"
-    echo ""
-    sleep 1
-    
-    echo "    You DASH forward in a blur—" | pv -qL 40
-    sleep 0.3
-    
-    # Visceral attack animation
-    for i in {1..3}; do
-        echo -ne "\r    ░░░░▒▒▒▒▓▓▓▓"
-        sleep 0.1
-        echo -ne "\r    ▒▒▒▒▓▓▓▓████"
-        sleep 0.1
-        echo -ne "\r    ▓▓▓▓████████"
-        sleep 0.1
+# Helper: present choices via gum (fallback to read)
+present_choices() {
+  local opts=("$@")
+  if command -v gum >/dev/null; then
+    gum choose "${opts[@]}"
+  else
+    echo "Choose an option:"
+    select opt in "${opts[@]}"; do
+      [[ -n "$opt" ]] && echo "$opt" && break
     done
-    echo ""
-    echo ""
-    sleep 0.3
-    
-    echo "    Your hand PLUNGES into his chest!" | pv -qL 40
-    sleep 0.5
-    
-    figlet -f slant "VISCERAL"
-    echo ""
-    sleep 0.8
-    
-    echo "    Blood erupts as you RIP through flesh and bone," | pv -qL 40
-    echo "    tearing out his very essence in a crimson spray!" | pv -qL 40
-    sleep 1
-    echo ""
-    
-    # Damage display
-    gum style --border double --padding "1 3" --border-foreground 196 --foreground 196 "💀 VISCERAL ATTACK: 78 DAMAGE 💀"
-    echo ""
-    sleep 1
-    
-    echo "    The Huntsman's eyes go wide... then empty." | pv -qL 40
-    sleep 0.5
-    echo "    He crumples to the cobblestones, lifeless." | pv -qL 40
-    sleep 1
-    echo ""
-    
-    figlet -f banner "PREY SLAUGHTERED"
-    echo ""
-    sleep 1.5
-    
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | pv -qL 200
-    echo ""
-    
-    # Rewards
-    ECHOES_GAINED=350
-    PLAYER_ECHOES=$((PLAYER_ECHOES + ECHOES_GAINED))
-    PLAYER_BULLETS=$((PLAYER_BULLETS - 1))
-    
-    echo "    The Huntsman's corpse dissolves into mist..." | pv -qL 40
-    sleep 0.8
-    echo ""
-    
-    gum style --border rounded --padding "1 2" --border-foreground 226 "✨ You gained ${ECHOES_GAINED} Blood Echoes ✨"
-    echo ""
-    sleep 1
-    
-    echo "    Silence falls over the fog-drenched street." | pv -qL 40
-    echo "    Your first hunt... complete." | pv -qL 40
-    sleep 1.5
-    echo ""
-    
-    # Status display
-    gum style --border rounded --padding "0 1" --border-foreground 33 "❤️  HP: ${PLAYER_HP}/100 | ⚡ Stamina: ${PLAYER_STAMINA}/100 | 👁️  Insight: ${PLAYER_INSIGHT} | 🩸 Echoes: ${PLAYER_ECHOES} | 🔫 Bullets: ${PLAYER_BULLETS}"
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | pv -qL 200
-    echo ""
-    sleep 1
-    
-    # Next area description
-    echo "    Ahead, the cobblestone path splits:" | pv -qL 40
-    echo ""
-    echo "    To the LEFT: A narrow alley descends into darkness," | pv -qL 40
-    echo "    strange whispers echoing from below..." | pv -qL 40
-    echo ""
-    echo "    To the RIGHT: Stone steps climb toward a towering" | pv -qL 40
-    echo "    cathedral, its bells tolling in the distance..." | pv -qL 40
-    echo ""
-    echo "    AHEAD: The main street continues through the fog," | pv -qL 40
-    echo "    where more torches flicker and shadows move..." | pv -qL 40
-    echo ""
-    sleep 1
-    
-    # Choice prompt
-    NEXT_ACTION=$(gum choose \
-        "🌑 Descend into the dark alley (explore unknown)" \
-        "⛪ Climb toward the cathedral (seek answers)" \
-        "🔦 Continue down the main street (hunt more beasts)" \
-        "🔥 Rest at nearby lantern (checkpoint - save & level up)")
-    
-    echo ""
-    gum style --border double --padding "1 2" --border-foreground 33 "🎯 CHOICE: ${NEXT_ACTION}"
-    echo ""
-    
-    # Output state for next iteration
-    echo "STATE: post_first_hunt"
-    echo "PLAYER_HP: ${PLAYER_HP}"
-    echo "PLAYER_STAMINA: ${PLAYER_STAMINA}"
-    echo "PLAYER_BULLETS: ${PLAYER_BULLETS}"
-    echo "PLAYER_INSIGHT: ${PLAYER_INSIGHT}"
-    echo "PLAYER_ECHOES: ${PLAYER_ECHOES}"
-    echo "WEAPON: saw_cleaver_extended"
-    echo "LOCATION: yharnam_streets_fork"
-    echo "CHOICE: ${NEXT_ACTION}"
-    echo "STEP_COMPLETE"
+  fi
 }
-step11
+
+step10() {
+  # Advance chapter counter
+  CHAPTER=$((CHAPTER + 1))
+
+  display_text "\n=== Chapter $CHAPTER: The Ember Hall ===\n"
+  display_text "The tunnel widens into a vast hall bathed in the orange glow of a river of molten lava.\n"
+  display_text "Heat washes over you, and the roar of fire echoes off the stone walls.\n"
+
+  show_status
+
+  # Player choices
+  local choice
+  choice=$(present_choices \
+    "Advance to the lava bridge" \
+    "Inspect the stone altar" \
+    "Invoke the Dragon Scale")
+
+  case "$choice" in
+    "Advance to the lava bridge")
+      display_text "\nYou step onto a precarious stone bridge spanning the lava.\n"
+      # 20% chance of taking damage
+      if (( RANDOM % 5 == 0 )); then
+        HP=$((HP - 15))
+        display_text "A sudden burst of heat singes your arm! (-15 HP)\n"
+      else
+        display_text "You cross safely, the heat strengthening your resolve.\n"
+      fi
+      ;;
+    "Inspect the stone altar")
+      display_text "\nThe altar bears carvings identical to the runes on the Dragon Scale.\n"
+      display_text "A hidden compartment slides open, revealing a glowing ruby.\n"
+      INVENTORY+=("Ruby of Ember")
+      display_text "You acquire the Ruby of Ember.\n"
+      ;;
+    "Invoke the Dragon Scale")
+      if [[ " ${INVENTORY[*]} " == *"Dragon Scale"* ]]; then
+        display_text "\nYou raise the Dragon Scale. Its fire awakens, forming a protective shield around you.\n"
+        display_text "You feel rejuvenated. (+20 HP)\n"
+        HP=$((HP + 20))
+        # Remove the scale after use (optional)
+        INVENTORY=("${INVENTORY[@]/Dragon Scale}")
+      else
+        display_text "\nYou fumble for the Dragon Scale, but it is not in your possession.\n"
+      fi
+      ;;
+    *)
+      display_text "\nIndecision holds you in place. The lava hisses.\n"
+      ;;
+  esac
+
+  # Cap HP at 100 and avoid negative values
+  (( HP > 100 )) && HP=100
+  (( HP < 0 )) && HP=0
+
+  show_status
+
+  echo "Chapter $CHAPTER complete. HP: $HP"
+}
+
+step10

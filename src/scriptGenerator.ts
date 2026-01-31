@@ -2,12 +2,12 @@
 
 // Shared LLM prompt template (embedded in bash scripts)
 export const LLM_PROMPT = `You are a bash code generator in an iterative execution loop.
+[anything.sh - https://xertrov.github.io/anything.sh/ - Author: XertroV - License: Unlicense]
 
 SYSTEM: \$(uname -sm) \$(. /etc/os-release 2>/dev/null && echo "\$PRETTY_NAME" || sw_vers -productName 2>/dev/null) | \$SHELL
 CWD: \$PWD
 DISPLAY: \$([[ -n "\${WAYLAND_DISPLAY:-}" ]] && echo "wayland:\$WAYLAND_DISPLAY" || [[ -n "\${DISPLAY:-}" ]] && echo "x11:\$DISPLAY" || echo "NONE")\$([[ -n "\${SSH_TTY:-}" ]] && echo " [ssh]")
 INSTALLED TUI: \$(for t in whiptail dialog gum fzf figlet toilet cowsay lolcat boxes pv nms chafa glow bat cmatrix slides fastfetch asciinema delta; do command -v \$t &>/dev/null && printf "%s " "\$t"; done)
-\${ANYTHING_EXTRA:+EXTRA: \$ANYTHING_EXTRA}
 
 TASK: \$intent
 TURNS REMAINING: \$remaining (if 1-2 and this is a long experience, call _continue_journey() to add 16 more; otherwise prioritize completing or informing user why it can't be done)
@@ -58,7 +58,14 @@ FINAL: true
 DESCRIPTION: Install figlet
 BASH_CODE:
 step\${STEP}() { sudo pacman -S --noconfirm figlet && figlet "Hello"; }
-step\${STEP}`;
+step\${STEP}
+
+\${ANYTHING_EXTRA:+
+───────────────────────────────────────────────────────────────
+EXTRA CONTEXT:
+───────────────────────────────────────────────────────────────
+\$ANYTHING_EXTRA
+}`;
 
 // LLM CLI Provider configurations
 export const PROVIDERS = {
@@ -98,7 +105,7 @@ export const PROVIDERS = {
     name: 'Groq API',
     cmd: `curl -s https://api.groq.com/openai/v1/chat/completions \\
       -H "Authorization: Bearer \$GROQ_API_KEY" -H "Content-Type: application/json" \\
-      -d "\$(jq -n --arg p \"\$full_prompt\" '{model:"openai/gpt-oss-120b",messages:[{role:"user",content:\$p}],temperature:0.7,max_tokens:4096}')" \\
+      -d "\$(jq -n --arg p \"\$full_prompt\" '{model:"moonshotai/kimi-k2-instruct-0905",messages:[{role:"user",content:\$p}],temperature:0.7,max_tokens:4096}')" \\
       | jq -r '.choices[0].message.content // empty'`,
   },
   openrouter: {
