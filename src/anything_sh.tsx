@@ -251,6 +251,9 @@ export default function AnythingSH() {
               <p className="mb-4">
                 The script grows. It <span className="text-emerald-400">pulses</span>. It reaches toward your intent like cytoplasm flowing toward food. One moment it's 50 lines. Then it's 200. Then it's whatever it needs to be.
               </p>
+              <p className="mb-4 text-zinc-400 italic">
+                Beauty without architecture. Order without structure. Risk without reward.
+              </p>
               <p className="mb-4 text-zinc-500 italic">
                 "Traditional automation is a machine," the naturalist observed, lowering his voice so as not to startle it. "But this... this is <span className="text-white">biological logic</span>."
               </p>
