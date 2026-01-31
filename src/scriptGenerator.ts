@@ -145,6 +145,12 @@ STEP=0
 MAX_ITER=16  # Max LLM calls per task (increase for complex tasks)
 BONUS_ITER=0  # Extra iterations granted via _continue_journey()
 SPINNER_PID=""  # Track spinner for cleanup
+AGENT_MODE=0  # Set to 1 with -a/--agent flag for non-interactive execution
+
+# ─────────────────────────────────────────────────────────────────
+# TRACK ORIGINAL: For agent mode self-calling, track the original script
+# ─────────────────────────────────────────────────────────────────
+[[ -z "\${ANYTHING_ORIGINAL:-}" ]] && export ANYTHING_ORIGINAL="$SELF"
 
 # ─────────────────────────────────────────────────────────────────
 # AUTO-LOCALIZE: Copy to current dir if running from system path
@@ -158,25 +164,46 @@ if [[ "$SELF" == *"/bin/"* && ! -f "$ORIG" ]]; then
 fi
 
 # ─────────────────────────────────────────────────────────────────
-# BACKUP: Save original on first run
+# ARGUMENT PARSING: Handle -a/--agent flag
 # ─────────────────────────────────────────────────────────────────
-[[ ! -f "$ORIG" ]] && cp "$SELF" "$ORIG" && echo -e "\\033[36m[backup]\\033[0m $ORIG"
+while [[ \$# -gt 0 ]]; do case "$1" in -a|--agent) AGENT_MODE=1; shift ;; --) shift; break ;; -*) echo -e "\\033[31m[error]\\033[0m Unknown: $1" >&2; exit 1 ;; *) break ;; esac; done
+
+# ─────────────────────────────────────────────────────────────────
+# AGENT MODE: Create temp copy and exec for non-interactive execution
+# ─────────────────────────────────────────────────────────────────
+if [[ \$AGENT_MODE -eq 1 && -n "\${1:-}" ]]; then
+    TEMP_SCRIPT="./anything_agent_\$\$.sh"
+    cp "\${ANYTHING_ORIGINAL}" "$TEMP_SCRIPT"
+    chmod +x "$TEMP_SCRIPT"
+    exec "$TEMP_SCRIPT" "\$@"
+fi
+
+# ─────────────────────────────────────────────────────────────────
+# BACKUP: Save original on first run (only for original script)
+# ─────────────────────────────────────────────────────────────────
+[[ "$SELF" == "\${ANYTHING_ORIGINAL}" && ! -f "$ORIG" ]] && cp "$SELF" "$ORIG" && echo -e "\\033[36m[backup]\\033[0m $ORIG"
 
 # ─────────────────────────────────────────────────────────────────
 # CLEANUP: Runs on EXIT - archives session, restores original
 # ─────────────────────────────────────────────────────────────────
 _cleanup() {
-    local rc=$?
+    local rc=\$?
     [[ -n "\$SPINNER_PID" ]] && kill "\$SPINNER_PID" 2>/dev/null
     printf "\\r\\033[K"  # Clear spinner line
-    [[ -f "$ORIG" ]] || return $rc
-    local archive="\${SELF%.sh}_$(date +%Y%m%d_%H%M%S).log.sh"
-    cp "$SELF" "$archive" 2>/dev/null || true
-    cp "$ORIG" "$SELF" 2>/dev/null || true
-    echo ""
-    echo -e "\\033[36m[archived]\\033[0m $archive"
-    echo -e "\\033[36m[restored]\\033[0m $SELF"
-    exit $rc
+    [[ -f "$ORIG" ]] || return \$rc
+    local archive="\${SELF%.sh}_\$(date +%Y%m%d_%H%M%S).log.sh"
+    cp "$SELF" "\$archive" 2>/dev/null || true
+    # Only restore original if this is the original script, not an agent temp copy
+    if [[ "$SELF" == "\${ANYTHING_ORIGINAL}" ]]; then
+        cp "$ORIG" "$SELF" 2>/dev/null || true
+        echo ""
+        echo -e "\\033[36m[archived]\\033[0m \$archive"
+        echo -e "\\033[36m[restored]\\033[0m $SELF"
+    else
+        # Agent mode temp copy - just archive, don't restore
+        echo -e "\\033[36m[archived]\\033[0m \$archive"
+    fi
+    exit \$rc
 }
 trap _cleanup EXIT
 
@@ -187,9 +214,20 @@ _ask() {
     local intent="$1"
     local feedback="\${2:-}"
     local remaining="\${3:-?}"
+    local agent_context=""
+    if [[ \$AGENT_MODE -eq 1 ]]; then
+        agent_context="
+
+AGENT MODE: This script is running with -a/--agent flag (non-interactive).
+- You cannot use 'read', 'gum', 'fzf', or any interactive tools - the user cannot respond
+- Do not prompt for input or confirmation
+- Your FINAL: true step should output a summary via echo of what was created/modified
+- This summary will be captured and returned to the parent script
+- Example: echo 'Created fib() function in ./lib/math.sh'"
+    fi
     local full_prompt
     read -r -d '' full_prompt <<PROMPT
-${LLM_PROMPT}
+${LLM_PROMPT}\$agent_context
 PROMPT
 
     ${PROVIDERS[provider].cmd}
@@ -224,6 +262,8 @@ _evolve() {
     local feedback=""
     local is_final="false"
     local iteration=0
+    local output=""
+    local exit_code=0
 
     # Remove trailing _prompt and # from script (so reruns replay without prompting)
     sed -i '/^_prompt$/,/^#$/d' "$SELF"
@@ -283,7 +323,6 @@ EVOLUTION
 
         # Execute with PTY (supports interactive programs like whiptail/dialog)
         echo -e "\\033[36m[running...]\\033[0m"
-        local output exit_code
         local tmpfile=\$(mktemp) codefile=\$(mktemp)
         printf '%s' "\$code" > "\$codefile"
         if [[ "\$(uname)" == "Darwin" ]]; then
@@ -295,6 +334,7 @@ EVOLUTION
         rm -f "\$codefile"
         # Clean ANSI codes for LLM feedback (script captures control sequences)
         output=\$(perl -pe 's/\\e\\[[0-9;]*[mGKHJF]//g; s/\\r\\n/\\n/g; s/\\r//g' "\$tmpfile" 2>/dev/null || cat "\$tmpfile")
+        final_output="$output"
         rm -f "\$tmpfile"
         [[ \$exit_code -ne 0 ]] && echo -e "\\033[31m[exit \$exit_code]\\033[0m"
 
@@ -345,6 +385,10 @@ Please diagnose the issue and fix it. You may need to install additional depende
 
     # Check if we hit max iterations without completing
     if [[ "$is_final" != "true" ]]; then
+        if [[ \$AGENT_MODE -eq 1 ]]; then
+            echo -e "\\033[31m[error]\\033[0m Max iterations reached without completion" >&2
+            exit 1
+        fi
         echo -e "\\033[33m[max iterations reached]\\033[0m Task incomplete after $iteration steps."
         read -rp $'\\033[95m  continue? [Y/n] \\033[0m' cont
         if [[ -z "$cont" || "$cont" =~ ^[Yy] ]]; then
@@ -353,6 +397,18 @@ Please diagnose the issue and fix it. You may need to install additional depende
             return
         fi
         echo -e "\\033[36m[stopped]\\033[0m You can retry or try a different approach."
+    fi
+
+    # In agent mode, return the final output and exit
+    if [[ \$AGENT_MODE -eq 1 ]]; then
+        if [[ \$exit_code -ne 0 ]]; then
+            # On error, output to stderr
+            echo "\$output" >&2
+            exit \$exit_code
+        else
+            echo "\$output"
+            exit 0
+        fi
     fi
 
     # Append _prompt for next user input (for re-runs of the script)
@@ -377,28 +433,39 @@ _prompt() {
 }
 
 # ─────────────────────────────────────────────────────────────────
-# BANNER
+# BANNER (skip in agent mode)
 # ─────────────────────────────────────────────────────────────────
-echo -e "\\033[32m┌─────────────────────────────────────┐\\033[0m"
-echo -e "\\033[32m│\\033[0m   anything.sh · autopoietic loop    \\033[32m│\\033[0m"
-echo -e "\\033[32m│\\033[0m   provider: ${PROVIDERS[provider].name.toLowerCase().padEnd(23)} \\033[32m│\\033[0m"
-echo -e "\\033[32m└─────────────────────────────────────┘\\033[0m"
-echo "  Ctrl+C or 'exit' to save & quit"
-echo ""
+if [[ \$AGENT_MODE -eq 0 ]]; then
+    echo -e "\\033[32m┌─────────────────────────────────────┐\\033[0m"
+    echo -e "\\033[32m│\\033[0m   anything.sh · autopoietic loop    \\033[32m│\\033[0m"
+    echo -e "\\033[32m│\\033[0m   provider: ${PROVIDERS[provider].name.toLowerCase().padEnd(23)} \\033[32m│\\033[0m"
+    echo -e "\\033[32m└─────────────────────────────────────┘\\033[0m"
+    echo "  Ctrl+C or 'exit' to save & quit"
+    echo ""
 
-# ─────────────────────────────────────────────────────────────────
-# SYSTEM INFO
-# ─────────────────────────────────────────────────────────────────
-echo -e "\\033[36m  os:\\033[0m    \$(. /etc/os-release 2>/dev/null && echo "\$PRETTY_NAME" || sw_vers -productName 2>/dev/null)"
-echo -e "\\033[36m  arch:\\033[0m  \$(uname -sm)"
-echo -e "\\033[36m  shell:\\033[0m \$SHELL"
-echo -e "\\033[36m  pwd:\\033[0m   \$PWD"
-echo ""
+    # ─────────────────────────────────────────────────────────────────
+    # SYSTEM INFO
+    # ─────────────────────────────────────────────────────────────────
+    echo -e "\\033[36m  os:\\033[0m    \$(. /etc/os-release 2>/dev/null && echo "\$PRETTY_NAME" || sw_vers -productName 2>/dev/null)"
+    echo -e "\\033[36m  arch:\\033[0m  \$(uname -sm)"
+    echo -e "\\033[36m  shell:\\033[0m \$SHELL"
+    echo -e "\\033[36m  pwd:\\033[0m   \$PWD"
+    echo ""
+fi
 
 # ─────────────────────────────────────────────────────────────────
 # ENTRY: Handle initial prompt or start interactive
 # ─────────────────────────────────────────────────────────────────
-[[ -n "\${1:-}" ]] && _evolve "$1" || _prompt
+if [[ \$AGENT_MODE -eq 1 ]]; then
+    # Agent mode requires a prompt argument
+    if [[ -z "\${1:-}" ]]; then
+        echo -e "\\033[31m[error]\\033[0m Agent mode requires a prompt argument" >&2
+        exit 1
+    fi
+    _evolve "$1"
+else
+    [[ -n "\${1:-}" ]] && _evolve "$1" || _prompt
+fi
 #
 `;
 
@@ -406,72 +473,95 @@ echo ""
 export const getScriptCompact = (provider: ProviderId) => `#!/bin/bash
 # anything.sh [compact] · ${PROVIDERS[provider].name}
 set -uo pipefail
-SELF="$0"; ORIG="\${SELF}.orig"; STEP=0; MAX_ITER=16; BONUS_ITER=0; SPINNER_PID=""
+SELF="$0"; ORIG="\${SELF}.orig"; STEP=0; MAX_ITER=16; BONUS_ITER=0; SPINNER_PID=""; AGENT_MODE=0
+[[ -z "\${ANYTHING_ORIGINAL:-}" ]] && export ANYTHING_ORIGINAL="$SELF"
 
 # Auto-localize: copy to current dir if running from system path
 if [[ "$SELF" == *"/bin/"* && ! -f "$ORIG" ]]; then LOCAL="./anything_\$(date +%Y%m%d_%H%M%S).sh"; cp "$SELF" "$LOCAL"; chmod +x "$LOCAL"; echo -e "\\033[36m[localized]\\033[0m $LOCAL"; exec "$LOCAL" "\$@"; fi
 
-[[ ! -f "$ORIG" ]] && cp "$SELF" "$ORIG"
-_cleanup() { [[ -n "\$SPINNER_PID" ]] && kill "\$SPINNER_PID" 2>/dev/null; printf "\\r\\033[K"; cp "$SELF" "\${SELF%.sh}_$(date +%s).log.sh"; cp "$ORIG" "$SELF"; echo -e "\\n\\033[36m[saved]\\033[0m"; }
+# Parse args
+POSITIONAL=(); while [[ $# -gt 0 ]]; do case "$1" in -a|--agent) AGENT_MODE=1; shift ;; --) shift; break ;; -*) echo "[error] Unknown: $1" >&2; exit 1 ;; *) POSITIONAL+=("$1"); shift ;; esac; done; set -- "\${POSITIONAL[@]}"
+
+# Agent mode temp copy
+if [[ $AGENT_MODE -eq 1 && -n "\${1:-}" ]]; then TEMP="./anything_agent_\$\$.sh"; cp "\${ANYTHING_ORIGINAL}" "$TEMP"; chmod +x "$TEMP"; exec "$TEMP" "\$@"; fi
+
+# Backup only for original
+[[ "$SELF" == "\${ANYTHING_ORIGINAL}" && ! -f "$ORIG" ]] && cp "$SELF" "$ORIG"
+_cleanup() { [[ -n "\$SPINNER_PID" ]] && kill "\$SPINNER_PID" 2>/dev/null; printf "\r\033[K"; cp "$SELF" "\${SELF%.sh}_$(date +%s).log.sh"; [[ "$SELF" == "\${ANYTHING_ORIGINAL}" ]] && cp "$ORIG" "$SELF"; echo -e "\n\\033[36m[saved]\\033[0m"; }
 trap _cleanup EXIT
 _continue_journey() { BONUS_ITER=\$((BONUS_ITER + 16)); echo -e "\\033[36m[+16 iterations]\\033[0m"; }
 
 _ask() {
-    local intent="$1"; local feedback="\${2:-}"; local remaining="\${3:-?}"; local full_prompt
+    local intent="$1"; local feedback="\${2:-}"; local remaining="\${3:-?}"; local agent_ctx=""
+    if [[ \$AGENT_MODE -eq 1 ]]; then
+        agent_ctx=" AGENT MODE: running non-interactive. No 'read' or interactive tools. FINAL: true step should echo a summary."
+    fi
+    local full_prompt
     read -r -d '' full_prompt <<PROMPT
-${LLM_PROMPT}
+${LLM_PROMPT}\$agent_ctx
 PROMPT
     ${PROVIDERS[provider].cmd}
 }
 
 _spin() { while :; do for c in · ·· ··· ···· ····· ' ····' '  ···' '   ··' '    ·' '     '; do printf "\\r\\033[36m%s\\033[0m" "$c"; sleep .1; done; done; }
 _evolve() {
-    local intent="$1" feedback="" is_final="false" iter=0
+    local intent="$1" feedback="" is_final="false" iter=0 out="" rc=0
     sed -i '/^_prompt$/,/^#$/d' "$SELF"
     while [[ "$is_final" != "true" && $iter -lt $((MAX_ITER + BONUS_ITER)) ]]; do
         ((iter++)); ((STEP++)); local remaining=$((MAX_ITER + BONUS_ITER - iter))
-        _spin & SPINNER_PID=$!; local resp=$(_ask "$intent" "$feedback" "$remaining"); kill \$SPINNER_PID 2>/dev/null; SPINNER_PID=""; printf "\\r\\033[K"
+        _spin & SPINNER_PID=$!; local resp=$(_ask "$intent" "$feedback" "$remaining"); kill \$SPINNER_PID 2>/dev/null; SPINNER_PID=""; printf "\r\033[K"
         is_final=$(echo "$resp" | grep -i '^FINAL:' | head -1 | sed 's/^FINAL:[[:space:]]*//' | tr '[:upper:]' '[:lower:]')
         local desc=$(echo "$resp" | grep -i '^DESCRIPTION:' | head -1 | sed 's/^DESCRIPTION:[[:space:]]*//')
         local code=$(echo "$resp" | sed -n '/^BASH_CODE:/,$ { /^BASH_CODE:/d; p }')
         [[ -z "$code" ]] && code="$resp" && desc="$intent" && is_final="true"
         echo "$code" | grep -q '^\`\`\`' && code=$(echo "$code" | sed -n '/^\`\`\`/,/^\`\`\`/p' | sed '/^\`\`\`/d')
-        echo -e "\\033[32m[step $STEP]\\033[0m $desc"
-        echo -e "\\n# STEP $STEP: $desc | FINAL: $is_final\\n$code" >> "$SELF"
-        echo -e "\\033[36m[running...]\\033[0m"
-        local out rc tmpf=\$(mktemp) codef=\$(mktemp)
+        echo -e "\033[32m[step $STEP]\033[0m $desc"
+        echo -e "\n# STEP $STEP: $desc | FINAL: $is_final\n$code" >> "$SELF"
+        echo -e "\033[36m[running...]\033[0m"
+        local tmpf=\$(mktemp) codef=\$(mktemp)
         printf '%s' "\$code" > "\$codef"
         if [[ "\$(uname)" == "Darwin" ]]; then script -q "\$tmpf" bash "\$codef"; else script -q -e -c "bash '\$codef'" "\$tmpf"; fi
         rm -f "\$codef"
-        rc=\$?; out=\$(perl -pe 's/\\e\\[[0-9;]*[mGKHJF]//g; s/\\r//g' "\$tmpf" 2>/dev/null || cat "\$tmpf"); rm -f "\$tmpf"
-        [[ \$rc -ne 0 ]] && echo -e "\\033[31m[exit \$rc]\\033[0m"
+        rc=\$?; out=\$(perl -pe 's/\e\[[0-9;]*[mGKHJF]//g; s/\r//g' "\$tmpf" 2>/dev/null || cat "\$tmpf"); rm -f "\$tmpf"
+        [[ \$rc -ne 0 ]] && echo -e "\033[31m[exit \$rc]\033[0m"
         # Append output immediately as comments (before next LLM call, in case of crash)
         [[ -n "\$out" ]] && { local ln=\$(echo "\$out"|wc -l); if [[ \$ln -gt 1000 ]]; then { echo ""; echo "# PREV OUTPUT:"; echo "\$out"|head -400|uniq|sed 's/^/# /'; echo "# [...\$((ln-800)) snipped...]"; echo "\$out"|tail -400|uniq|sed 's/^/# /'; } >>"\$SELF"; else { echo ""; echo "# PREV OUTPUT:"; echo "\$out"|uniq|sed 's/^/# /'; } >>"\$SELF"; fi; }
         if [[ "$is_final" != "true" ]]; then
-            feedback="\\nPREVIOUS OUTPUT (exit $rc):\\n$out\\n"
+            feedback="\nPREVIOUS OUTPUT (exit $rc):\n$out\n"
         elif [[ $rc -ne 0 && $rc -ne 141 && $iter -lt $MAX_ITER ]]; then
-            echo -e "\\033[33m[recovery...]\\033[0m"; is_final="false"
-            feedback="\\nFINAL FAILED (exit $rc):\\n$out\\nPlease fix.\\n"
+            echo -e "\033[33m[recovery...]\033[0m"; is_final="false"
+            feedback="\nFINAL FAILED (exit $rc):\n$out\nPlease fix.\n"
         fi
     done
     if [[ "$is_final" != "true" ]]; then
-        echo -e "\\033[33m[max iterations]\\033[0m Incomplete after $iter steps."
-        read -rp $'\\033[95m  continue? [Y/n] \\033[0m' c
+        if [[ \$AGENT_MODE -eq 1 ]]; then echo -e "\033[31m[error]\033[0m Incomplete" >&2; exit 1; fi
+        echo -e "\033[33m[max iterations]\033[0m Incomplete after $iter steps."
+        read -rp $'\033[95m  continue? [Y/n] \033[0m' c
         if [[ -z "$c" || "$c" =~ ^[Yy] ]]; then iter=0; _evolve "$intent"; return; fi
-        echo -e "\\033[36m[stopped]\\033[0m"
+        echo -e "\033[36m[stopped]\033[0m"
     fi
-    echo -e "\\n_prompt\\n#" >> "$SELF"
+    if [[ \$AGENT_MODE -eq 1 ]]; then
+        if [[ \$rc -ne 0 ]]; then echo "\$out" >&2; exit \$rc; else echo "\$out"; exit 0; fi
+    fi
+    echo -e "\n_prompt\n#" >> "$SELF"
     _prompt
 }
 
 _prompt() {
-    read -rp $'\\033[95m  become? \\033[0m' i || exit
+    read -rp $'\033[95m  become? \033[0m' i || exit
     [[ -z "$i" ]] && exit; _evolve "$i"
 }
 
-echo "anything.sh · ${PROVIDERS[provider].name} · ctrl+c = save & quit"
-echo -e "\\033[36m  \$(uname -sm) | \$(. /etc/os-release 2>/dev/null && echo "\$PRETTY_NAME" || sw_vers -productName 2>/dev/null) | \$SHELL\\033[0m"
-echo ""
-[[ -n "\${1:-}" ]] && _evolve "$1" || _prompt
+if [[ \$AGENT_MODE -eq 0 ]]; then
+    echo "anything.sh · ${PROVIDERS[provider].name} · ctrl+c = save & quit"
+    echo -e "\033[36m  \$(uname -sm) | \$(. /etc/os-release 2>/dev/null && echo "\$PRETTY_NAME" || sw_vers -productName 2>/dev/null) | \$SHELL\033[0m"
+    echo ""
+fi
+if [[ \$AGENT_MODE -eq 1 ]]; then
+    if [[ -z "\${1:-}" ]]; then echo "[error] Agent mode requires prompt" >&2; exit 1; fi
+    _evolve "$1"
+else
+    [[ -n "\${1:-}" ]] && _evolve "$1" || _prompt
+fi
 #
 `;
