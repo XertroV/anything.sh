@@ -3,3 +3,5 @@
 - compile bitcoind from source (use bitcoin knots)
 - teach me how to script for the fish shell
 - make todd proud and release skyrim for bash, immersive TUI, atomospheric, action RPG
+- `anything.sh "set git to use different ed25519 key"`
+- `anything.sh "install docker and docker compose"`
