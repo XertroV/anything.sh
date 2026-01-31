@@ -118,25 +118,36 @@ const ProviderSelector = ({
 }: {
   provider: ProviderId;
   setProvider: (p: ProviderId) => void;
-}) => (
-  <div className="mb-6 flex flex-wrap gap-1.5">
-    {ALL_PROVIDERS.map((id) => {
-      const isSelected = provider === id;
-      return (
-        <button
-          key={id}
-          onClick={() => setProvider(id)}
-          className={isSelected
-            ? 'px-2 py-1.5 text-xs uppercase tracking-wide font-bold transition-all duration-150 bg-emerald-600 text-black'
-            : 'px-2 py-1.5 text-xs uppercase tracking-wide font-bold transition-all duration-150 bg-zinc-800 text-zinc-500 hover:bg-zinc-700 hover:text-zinc-300'
-          }
-        >
-          {PROVIDERS[id].name}
-        </button>
-      );
-    })}
-  </div>
-);
+}) => {
+  // Tested providers: claude, groq. All others are untested.
+  const UNTESTED_PROVIDERS: ProviderId[] = ['codex', 'aider', 'gemini', 'goose', 'continue', 'opencode', 'kimi', 'openrouter'];
+  
+  return (
+    <div className="mb-6 flex flex-wrap gap-1.5">
+      {ALL_PROVIDERS.map((id) => {
+        const isSelected = provider === id;
+        const isUntested = UNTESTED_PROVIDERS.includes(id);
+        return (
+          <button
+            key={id}
+            onClick={() => setProvider(id)}
+            className={isSelected
+              ? 'px-2 py-1.5 text-xs uppercase tracking-wide font-bold transition-all duration-150 bg-emerald-600 text-black flex items-center gap-1.5'
+              : 'px-2 py-1.5 text-xs uppercase tracking-wide font-bold transition-all duration-150 bg-zinc-800 text-zinc-500 hover:bg-zinc-700 hover:text-zinc-300 flex items-center gap-1.5'
+            }
+          >
+            {PROVIDERS[id].name}
+            {isUntested && (
+              <span className="text-[8px] bg-amber-600/80 text-black px-1 rounded-sm font-bold">
+                untested
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+};
 
 const EXAMPLE_PROMPTS = [
   "build a roguelike dungeon crawler, nice tui + animations",
@@ -271,7 +282,7 @@ export default function AnythingSH() {
 
           {/* Warning Banner - Dismissible */}
           {!warningDismissed && (
-            <div className="mt-8 mb-4">
+            <div className="mt-4 mb-4">
               <div className="relative bg-amber-950/30 border border-amber-800/50 p-4 text-amber-400/90 text-xs">
                 <button
                   onClick={handleDismissWarning}
@@ -291,7 +302,7 @@ export default function AnythingSH() {
             </div>
           )}
 
-          <div className="pt-8">
+          <div className="pt-4">
             <ManPageSection title="NAME">
               <span className="text-white font-bold">anything.sh</span> — the slime mold of bash. 
             </ManPageSection>
