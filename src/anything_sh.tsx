@@ -267,7 +267,21 @@ export default function AnythingSH() {
                 It's not written. It's <span className="text-emerald-400">grown</span>.
               </p>
             </ManPageSection>
-            
+
+            <ManPageSection title="ENVIRONMENT">
+              <p className="mb-2">
+                <span className="text-emerald-400">ANYTHING_EXTRA</span> — Optional. Inject custom context into the LLM prompt.
+              </p>
+              <p className="mb-4 text-zinc-500 text-xs pl-4">
+                Use to advertise platform-specific tools (e.g. <code className="text-zinc-400">say</code> on macOS), inform about installed utilities, or add task-specific instructions.
+              </p>
+              <div className="bg-zinc-950/50 border border-zinc-800 p-3 font-mono text-xs text-zinc-400">
+                <span className="text-zinc-600"># Example: macOS text-to-speech</span><br/>
+                <span className="text-emerald-400">export</span> ANYTHING_EXTRA=<span className="text-amber-400">"say command available for TTS"</span><br/>
+                <span className="text-zinc-400">./anything.sh</span> <span className="text-zinc-500">"narrate a spooky story"</span>
+              </div>
+            </ManPageSection>
+
             <div className="pt-12 text-zinc-600 text-xs space-y-1">
               <p>AUTHOR: XertroV</p>
               <p>LICENSE: Unlicense (Public Domain)</p>
@@ -322,6 +336,27 @@ export default function AnythingSH() {
               </div>
             </div>
 
+            {/* Download URL Section */}
+            <div className="border-b border-zinc-800 bg-zinc-900/30 p-3 backdrop-blur-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                <div className="flex items-center gap-2 text-[10px] text-zinc-500 uppercase tracking-wider flex-shrink-0">
+                  <Download className="w-3 h-3" />
+                  <span>Download</span>
+                </div>
+                <div className="flex-1 flex items-center gap-2">
+                  <code className="flex-1 bg-zinc-950 border border-zinc-800 px-2 py-1.5 text-xs text-emerald-400 font-mono truncate">
+                    {downloadUrl}
+                  </code>
+                  <CopyButton 
+                    onClick={handleCopyUrl} 
+                    copied={urlCopied} 
+                    label="Copy"
+                    className="flex-shrink-0 py-1.5 px-3"
+                  />
+                </div>
+              </div>
+            </div>
+
             {/* Code Content */}
             <div className="relative flex-grow overflow-auto custom-scrollbar bg-[#0c0c0c]">
                <pre className="p-4 md:p-6 text-xs md:text-sm leading-relaxed text-zinc-300 font-mono">
@@ -334,27 +369,6 @@ export default function AnythingSH() {
                   ))}
                 </code>
               </pre>
-            </div>
-
-            {/* Download URL Section */}
-            <div className="border-t border-zinc-800 bg-zinc-900/50 p-4 backdrop-blur-sm">
-              <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-                <div className="flex items-center gap-2 text-xs text-zinc-500 uppercase tracking-wider flex-shrink-0">
-                  <Download className="w-3 h-3" />
-                  <span>Download URL</span>
-                </div>
-                <div className="flex-1 flex items-center gap-2">
-                  <code className="flex-1 bg-zinc-950 border border-zinc-800 px-3 py-2 text-xs text-emerald-400 font-mono truncate">
-                    {downloadUrl}
-                  </code>
-                  <CopyButton 
-                    onClick={handleCopyUrl} 
-                    copied={urlCopied} 
-                    label="Copy"
-                    className="flex-shrink-0"
-                  />
-                </div>
-              </div>
             </div>
 
             {/* Action Bar */}
