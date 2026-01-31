@@ -7,7 +7,8 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently -k \"bunx tailwindcss -i ./src/index.css -o ./src/output.css --watch\" \"bun --hot src/index.ts\"",
-    "build": "bunx tailwindcss -i ./src/index.css -o ./src/output.css && bun build ./src/index.html --outdir=dist --sourcemap --target=browser --minify --define:process.env.NODE_ENV='\"production\"' --env='BUN_PUBLIC_*'",
+    "build": "bunx tailwindcss -i ./src/index.css -o ./src/output.css && bun build ./src/index.html --outdir=dist --sourcemap --target=browser --minify --define:process.env.NODE_ENV='\"production\"' --env='BUN_PUBLIC_*' && bun run generate-scripts",
+    "generate-scripts": "bun scripts/generate-scripts.ts",
     "start": "NODE_ENV=production bun src/index.ts"
   },
   "dependencies": {
