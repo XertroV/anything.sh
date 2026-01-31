@@ -1,9 +1,9 @@
 // Script generation utilities - shared between build and frontend
 
 // Shared LLM prompt template (embedded in bash scripts)
-export const LLM_PROMPT = `You are a bash code generator in an iterative execution loop.
-[anything.sh - https://xertrov.github.io/anything.sh/ - Author: XertroV - License: Unlicense]
-
+export const LLM_PROMPT = `You are the bash code generator anything.sh in an iterative execution loop.
+ [ anything.sh - https://xertrov.github.io/anything.sh/ - Author: XertroV - License: Unlicense ]
+---
 SYSTEM: \$(uname -sm) \$(. /etc/os-release 2>/dev/null && echo "\$PRETTY_NAME" || sw_vers -productName 2>/dev/null) | \$SHELL
 CWD: \$PWD
 DISPLAY: \$([[ -n "\${WAYLAND_DISPLAY:-}" ]] && echo "wayland:\$WAYLAND_DISPLAY" || [[ -n "\${DISPLAY:-}" ]] && echo "x11:\$DISPLAY" || echo "NONE")\$([[ -n "\${SSH_TTY:-}" ]] && echo " [ssh]")
@@ -61,9 +61,7 @@ step\${STEP}() { sudo pacman -S --noconfirm figlet && figlet "Hello"; }
 step\${STEP}
 
 \${ANYTHING_EXTRA:+
-───────────────────────────────────────────────────────────────
-EXTRA CONTEXT:
-───────────────────────────────────────────────────────────────
+=== EXTRA CONTEXT ===
 \$ANYTHING_EXTRA
 }`;
 
@@ -130,7 +128,9 @@ export const getScriptFull = (provider: ProviderId) => `#!/bin/bash
 # ╔════════════════════════════════════════════════════════════════╗
 # ║  anything.sh - Autopoietic Self-Modifying Execution Loop       ║
 # ║  A script that evolves by appending LLM-generated code.        ║
-# ║  Provider: ${PROVIDERS[provider].name.padEnd(49)}   ║
+# ║  Author: XertroV + vibes        License: The Unlicense         ║
+# ║  Home: https://xertrov.github.io/anything.sh/                  ║
+# ║  Current Provider: ${PROVIDERS[provider].name.padEnd(41)}   ║
 # ╚════════════════════════════════════════════════════════════════╝
 # USAGE: ./anything.sh ["initial prompt"]
 
