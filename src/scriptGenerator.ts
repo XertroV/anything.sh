@@ -32,6 +32,7 @@ RULES:
 - Your stdout/stderr feeds back to you, so output "Chapter 1 complete. Hero HP: 50" to inform your next step
 - Global variables persist across steps - declare without 'local' for state (HP=100, CHAPTER=1, INVENTORY=())
 - USER INPUT: Don't assume on vague tasks - ask. Prefer inline tools (gum, fzf, read -rp) that preserve context
+- CTRL+C HANDLING: In game loops, ALWAYS check exit codes after gum/fzf/read. If exit code is non-zero (especially 130), break the loop and return. Example: \`choice=\$(gum choose ...) || return\` or \`if ! choice=\$(gum choose ...); then return; fi\`
 - Full-screen TUI (whiptail/dialog) sparingly - include all context needed to decide in the dialog itself, recap after
 - Set FINAL: false after asking - response appears in next feedback
 - For interactive experiences: use the best available tools (TUI, colors, ASCII art) to make something impressive
@@ -404,7 +405,9 @@ _evolve_continue() {
     [[ -f "\$_ERR" ]] && errors=\$(cat "\$_ERR")
 
     # Merge stderr into output for LLM feedback (if any)
-    [[ -n "\$errors" ]] && output="\$output\$'\\n'STDERR:\\n\$errors"
+    [[ -n "\$errors" ]] && output="\$output
+STDERR:
+\$errors"
 
     # Clean ANSI codes for LLM feedback
     output=\$(echo "\$output" | perl -pe 's/\\e\\[[0-9;]*[mGKHJF]//g; s/\\r\\n/\\n/g; s/\\r//g' 2>/dev/null || echo "\$output")
@@ -600,7 +603,7 @@ _evolve_continue() {
     local intent="\$1" exit_code="\$2" is_final="\$3" step_num="\$4" output="" errors=""
     [[ -f "\$_OUT" ]] && output=\$(cat "\$_OUT")
     [[ -f "\$_ERR" ]] && errors=\$(cat "\$_ERR")
-    [[ -n "\$errors" ]] && output="\$output\$'\\n'STDERR:\\n\$errors"
+    [[ -n "\$errors" ]] && output=\$(printf '%s\\nSTDERR:\\n%s' "\$output" "\$errors")
     output=\$(echo "\$output" | perl -pe 's/\\e\\[[0-9;]*[mGKHJF]//g; s/\\r//g' 2>/dev/null || echo "\$output")
     [[ \$exit_code -ne 0 ]] && echo -e "\\033[31m[exit \$exit_code]\\033[0m"
     # Append output as comments (crash recovery)
