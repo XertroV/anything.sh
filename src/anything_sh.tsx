@@ -139,7 +139,7 @@ const ProviderSelector = ({
 );
 
 const EXAMPLE_PROMPTS = [
-  "build a roguelike dungeon crawler, nice tui + animations",
+  "make todd proud and release skyrim for bash, immersive TUI, atomospheric, action RPG",
   "scan my network with nmap, find unknown devices",
   "build an interactive Python game that uses the same autopoietic self-modifying pattern",
   "teach me shell scripting basics with hands-on interactive examples",
@@ -149,9 +149,9 @@ const EXAMPLE_PROMPTS = [
   "create a DNS lookup explainer, trace the path from root to any domain",
   "find my porn stash and hide it somewhere better",
   "build a system health dashboard, real-time stats",
+  "build a roguelike dungeon crawler, nice tui + animations",
   "generate a hypnotic terminal screensaver, mesmerizing ASCII animations",
   "compile bitcoind from source (use bitcoin knots)",
-  "make todd proud and release skyrim for bash",
 ];
 
 export default function AnythingSH() {

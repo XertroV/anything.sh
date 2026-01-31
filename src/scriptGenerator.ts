@@ -147,6 +147,17 @@ BONUS_ITER=0  # Extra iterations granted via _continue_journey()
 SPINNER_PID=""  # Track spinner for cleanup
 
 # ─────────────────────────────────────────────────────────────────
+# AUTO-LOCALIZE: Copy to current dir if running from system path
+# ─────────────────────────────────────────────────────────────────
+if [[ "$SELF" == *"/bin/"* && ! -f "$ORIG" ]]; then
+    LOCAL_COPY="./anything_\$(date +%Y%m%d_%H%M%S).sh"
+    cp "$SELF" "$LOCAL_COPY"
+    chmod +x "$LOCAL_COPY"
+    echo -e "\\033[36m[localized]\\033[0m $LOCAL_COPY"
+    exec "$LOCAL_COPY" "\$@"
+fi
+
+# ─────────────────────────────────────────────────────────────────
 # BACKUP: Save original on first run
 # ─────────────────────────────────────────────────────────────────
 [[ ! -f "$ORIG" ]] && cp "$SELF" "$ORIG" && echo -e "\\033[36m[backup]\\033[0m $ORIG"
@@ -396,6 +407,9 @@ export const getScriptCompact = (provider: ProviderId) => `#!/bin/bash
 # anything.sh [compact] · ${PROVIDERS[provider].name}
 set -uo pipefail
 SELF="$0"; ORIG="\${SELF}.orig"; STEP=0; MAX_ITER=16; BONUS_ITER=0; SPINNER_PID=""
+
+# Auto-localize: copy to current dir if running from system path
+if [[ "$SELF" == *"/bin/"* && ! -f "$ORIG" ]]; then LOCAL="./anything_\$(date +%Y%m%d_%H%M%S).sh"; cp "$SELF" "$LOCAL"; chmod +x "$LOCAL"; echo -e "\\033[36m[localized]\\033[0m $LOCAL"; exec "$LOCAL" "\$@"; fi
 
 [[ ! -f "$ORIG" ]] && cp "$SELF" "$ORIG"
 _cleanup() { [[ -n "\$SPINNER_PID" ]] && kill "\$SPINNER_PID" 2>/dev/null; printf "\\r\\033[K"; cp "$SELF" "\${SELF%.sh}_$(date +%s).log.sh"; cp "$ORIG" "$SELF"; echo -e "\\n\\033[36m[saved]\\033[0m"; }
