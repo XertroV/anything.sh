@@ -87,7 +87,7 @@ TURNS REMAINING: \$remaining (if 1-2 and this is a long experience, call _contin
 export const PROVIDERS = {
   claude: {
     name: 'Claude',
-    cmd: 'claude -p --model sonnet --dangerously-skip-permissions "$full_prompt" </dev/null 2>/dev/null',
+    cmd: 'claude -p --model sonnet --dangerously-skip-permissions "$full_prompt" </dev/null',
   },
   codex: {
     name: 'Codex',
@@ -172,7 +172,6 @@ SPINNER_PID=""  # Track spinner for cleanup
 AGENT_MODE=0  # Set to 1 with -a/--agent flag for non-interactive execution
 AGENT_REALTIME_FD=2  # Agent real-time output: 2=stderr, or use /dev/tty
 _OUT="/tmp/anything_out_\$\$"  # Stdout capture file for same-process execution
-_ERR="/tmp/anything_err_\$\$"  # Stderr capture file
 
 # ─────────────────────────────────────────────────────────────────
 # TRACK ORIGINAL: For agent mode self-calling, track the original script
@@ -244,7 +243,8 @@ _ask() {
     local agent_context=""
     local AGENT_MODE_RULE=""
     local script_content
-    script_content=\$(cat "\$SELF")
+    # Strip output sections to keep prompt size manageable - LLM doesn't need to see old output
+    script_content=\$(sed '/^# ─.*OUTPUT FROM STEP/,/^# ─\|EOF\|^$/d' "\$SELF" 2>/dev/null || cat "\$SELF")
     if [[ \$AGENT_MODE -eq 1 ]]; then
         agent_context="
 
@@ -331,13 +331,24 @@ PREVIOUS STEP OUTPUT (exit code \$prev_exit):
     _spinner &
     SPINNER_PID=\$!
 
-    local response=\$(_ask "\$intent" "\$feedback" "\$remaining")
+    local response
+    local ask_exit=0
+    response=\$(_ask "\$intent" "\$feedback" "\$remaining") || ask_exit=\$?
 
     # Stop spinner
     kill \$SPINNER_PID 2>/dev/null
     wait \$SPINNER_PID 2>/dev/null
     SPINNER_PID=""
     printf "\\r\\033[K" >&2
+
+    # Check if LLM CLI failed
+    if [[ \$ask_exit -ne 0 ]]; then
+        echo -e "\\033[31m[error]\\033[0m LLM CLI failed (exit \$ask_exit)"
+        echo "  The Claude CLI may have timed out or hit a rate limit."
+        echo "  Response was: '\$response'"
+        _prompt
+        return
+    fi
 
     # Parse structured response
     local is_final=\$(echo "\$response" | grep -i '^FINAL:' | head -1 | sed 's/^FINAL:[[:space:]]*//' | tr '[:upper:]' '[:lower:]')
@@ -384,7 +395,7 @@ PREVIOUS STEP OUTPUT (exit code \$prev_exit):
 \$code
 _rc=0  # Initialize before set -e
 set -e  # Exit on error (including Ctrl+C)
-_step\${STEP} 2> >(tee "\$_ERR" >&2) > >(tee "\$_OUT") && _rc=0 || _rc=\$?
+_step\${STEP} < /dev/null > >(tee "\$_OUT") && _rc=0 || _rc=\$?
 set +e
 _evolve_continue "\$intent" "\\$_rc" "\$is_final" "\$STEP"
 EVOLUTION
@@ -402,15 +413,9 @@ _evolve_continue() {
     local is_final="\$3"
     local step_num="\$4"
 
-    # Read captured output (stdout and stderr)
-    local output="" errors=""
+    # Read captured output
+    local output=""
     [[ -f "\$_OUT" ]] && output=\$(cat "\$_OUT")
-    [[ -f "\$_ERR" ]] && errors=\$(cat "\$_ERR")
-
-    # Merge stderr into output for LLM feedback (if any)
-    [[ -n "\$errors" ]] && output="\$output
-STDERR:
-\$errors"
 
     # Clean ANSI codes for LLM feedback
     output=\$(echo "\$output" | perl -pe 's/\\e\\[[0-9;]*[mGKHJF]//g; s/\\r\\n/\\n/g; s/\\r//g' 2>/dev/null || echo "\$output")
@@ -532,7 +537,7 @@ export const getScriptCompact = (provider: ProviderId) => `#!/bin/bash
 # anything.sh [compact] · ${PROVIDERS[provider].name}
 set -uo pipefail
 SELF="$0"; ORIG="\${SELF}.orig"; STEP=0; MAX_ITER=160; BONUS_ITER=0; SPINNER_PID=""; AGENT_MODE=0; AGENT_REALTIME_FD=2
-_OUT="/tmp/anything_out_\$\$"; _ERR="/tmp/anything_err_\$\$"
+_OUT="/tmp/anything_out_\$\$"
 [[ -z "\${ANYTHING_ORIGINAL:-}" ]] && export ANYTHING_ORIGINAL="$SELF"
 
 # Auto-localize
@@ -552,7 +557,7 @@ _continue_journey() { BONUS_ITER=\$((BONUS_ITER + 16)); echo -e "\\033[36m[+16 i
 _spin() { while :; do for c in · ·· ··· ···· ····· ' ····' '  ···' '   ··' '    ·' '     '; do printf "\\r\\033[36m%s\\033[0m" "\$c" >&2; sleep .1; done; done; }
 
 _ask() {
-    local intent="\$1"; local feedback="\${2:-}"; local remaining="\${3:-?}"; local agent_ctx=""; local AGENT_MODE_RULE=""; local script_content; script_content=\$(cat "\$SELF")
+    local intent="\$1"; local feedback="\${2:-}"; local remaining="\${3:-?}"; local agent_ctx=""; local AGENT_MODE_RULE=""; local script_content; script_content=\$(sed '/^# ─.*OUTPUT FROM STEP/,/^# ─\|EOF\|^$/d' "\$SELF" 2>/dev/null || cat "\$SELF")
     if [[ \$AGENT_MODE -eq 1 ]]; then
         agent_ctx=" AGENT MODE: running non-interactive. No 'read' or interactive tools. FINAL: true step should echo a summary."
     else
@@ -577,8 +582,9 @@ _evolve_step() {
     STEP=\$step_num; local remaining=\$((MAX_ITER + BONUS_ITER - step_num)) feedback=""
     [[ -n "\$prev_output" ]] && feedback="\\nPREVIOUS STEP OUTPUT (exit code \$prev_exit):\\n\$prev_output\\n"
     _spin & SPINNER_PID=\$!
-    local resp=\$(_ask "\$intent" "\$feedback" "\$remaining")
+    local resp; local ask_exit=0; resp=\$(_ask "\$intent" "\$feedback" "\$remaining") || ask_exit=\$?
     kill \$SPINNER_PID 2>/dev/null; wait \$SPINNER_PID 2>/dev/null; SPINNER_PID=""; printf "\\r\\033[K" >&2
+    if [[ \$ask_exit -ne 0 ]]; then echo -e "\\033[31m[error]\\033[0m LLM CLI failed (exit \$ask_exit)"; echo "  Claude CLI may have timed out or hit rate limit."; _prompt; return; fi
     local is_final=\$(echo "\$resp" | grep -i '^FINAL:' | head -1 | sed 's/^FINAL:[[:space:]]*//' | tr '[:upper:]' '[:lower:]')
     local desc=\$(echo "\$resp" | grep -i '^DESCRIPTION:' | head -1 | sed 's/^DESCRIPTION:[[:space:]]*//')
     local code=\$(echo "\$resp" | sed -n '/^BASH_CODE:/,\$ { /^BASH_CODE:/d; p }')
@@ -598,7 +604,7 @@ _evolve_step() {
 \$code
 _rc=0  # Initialize before set -e
 set -e  # Exit on error (including Ctrl+C)
-_step\${STEP} 2> >(tee "\$_ERR" >&2) > >(tee "\$_OUT") && _rc=0 || _rc=\$?
+_step\${STEP} < /dev/null > >(tee "\$_OUT") && _rc=0 || _rc=\$?
 set +e
 _evolve_continue "\$intent" "\\$_rc" "\$is_final" "\$STEP"
 EVOLUTION
@@ -606,10 +612,8 @@ EVOLUTION
 }
 
 _evolve_continue() {
-    local intent="\$1" exit_code="\$2" is_final="\$3" step_num="\$4" output="" errors=""
+    local intent="\$1" exit_code="\$2" is_final="\$3" step_num="\$4" output=""
     [[ -f "\$_OUT" ]] && output=\$(cat "\$_OUT")
-    [[ -f "\$_ERR" ]] && errors=\$(cat "\$_ERR")
-    [[ -n "\$errors" ]] && output=\$(printf '%s\\nSTDERR:\\n%s' "\$output" "\$errors")
     output=\$(echo "\$output" | perl -pe 's/\\e\\[[0-9;]*[mGKHJF]//g; s/\\r//g' 2>/dev/null || echo "\$output")
     [[ \$exit_code -ne 0 ]] && echo -e "\\033[31m[exit \$exit_code]\\033[0m"
     # Append output as comments (crash recovery)
