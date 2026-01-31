@@ -91,19 +91,19 @@ export const PROVIDERS = {
   },
   codex: {
     name: 'Codex',
-    cmd: 'codex exec --full-auto 2>/dev/null <<< "$full_prompt"',
+    cmd: 'echo "$full_prompt" | codex exec --full-auto -',
   },
   aider: {
     name: 'Aider',
-    cmd: 'aider --message "$(cat)" --yes --no-stream 2>/dev/null <<< "$full_prompt"',
+    cmd: 'aider --message-file /dev/stdin --yes --no-stream <<< "$full_prompt"',
   },
   gemini: {
     name: 'Gemini',
-    cmd: 'gemini -p 2>/dev/null <<< "$full_prompt"',
+    cmd: 'gemini -y <<< "$full_prompt"',
   },
   goose: {
     name: 'Goose',
-    cmd: 'goose run 2>/dev/null <<< "$full_prompt"',
+    cmd: 'goose run --no-session -q --instructions - <<< "$full_prompt"',
   },
   continue: {
     name: 'Continue',
@@ -111,14 +111,14 @@ export const PROVIDERS = {
   },
   opencode: {
     name: 'OpenCode',
-    cmd: 'opencode run 2>/dev/null <<< "$full_prompt"',
+    cmd: 'opencode run -q <<< "$full_prompt"',
   },
   kimi: {
     name: 'Kimi',
     cmd: 'kimi --print 2>/dev/null <<< "$full_prompt"',
   },
   groq: {
-    name: 'Groq API',
+    name: 'Groq',
     cmd: `curl -s https://api.groq.com/openai/v1/chat/completions \\
       -H "Authorization: Bearer \$GROQ_API_KEY" -H "Content-Type: application/json" \\
       -d "\$(echo "\$full_prompt" | jq -Rs '{model:"moonshotai/kimi-k2-instruct-0905",messages:[{role:"user",content:.}],temperature:0.7,max_tokens:4096}')" \\
@@ -327,7 +327,8 @@ PREVIOUS STEP OUTPUT (exit code \$prev_exit):
 "
     fi
 
-    # Start spinner
+    # Start spinner and timer
+    local start_time=\$(date +%s.%N)
     _spinner &
     SPINNER_PID=\$!
 
@@ -335,11 +336,14 @@ PREVIOUS STEP OUTPUT (exit code \$prev_exit):
     local ask_exit=0
     response=\$(_ask "\$intent" "\$feedback" "\$remaining") || ask_exit=\$?
 
-    # Stop spinner
+    # Stop spinner and calculate elapsed time
+    local end_time=\$(date +%s.%N)
+    local elapsed=\$(echo "\$end_time - \$start_time" | bc 2>/dev/null || echo "?")
     kill \$SPINNER_PID 2>/dev/null
     wait \$SPINNER_PID 2>/dev/null
     SPINNER_PID=""
     printf "\\r\\033[K" >&2
+    echo -e "\\033[36m[llm \${elapsed}s]\\033[0m"
 
     # Check if LLM CLI failed
     if [[ \$ask_exit -ne 0 ]]; then

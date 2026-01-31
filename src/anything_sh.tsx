@@ -132,7 +132,7 @@ const ProviderSelector = ({
           }
         >
           {PROVIDERS[id].name}
-          {id === 'groq' && <Star className="w-3 h-3 inline-block ml-1 text-amber-400" />}
+          {/*id === 'groq' && <Star className="w-3 h-3 inline-block ml-1 text-amber-400" />*/}
         </button>
       );
     })}
