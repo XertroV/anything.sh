@@ -302,10 +302,16 @@ export default function AnythingSH() {
 
             <ManPageSection title="DESCRIPTION">
               <p className="mb-4">
-                In nature, the slime mold has no brain, no blueprint, no plan. Yet it solves mazes, optimises railway networks, and exhibits a form of memory. It doesn't follow a path — it <span className="text-emerald-400 italic">becomes</span> the path.
+		The slime mold: a simple creature. It has no intelligence, no structure, no shape, and no plan.
+		Yet it does grade 8 science projects and out-trains the japanese.
+		It forms a memory only through its own involuntary oozing around, and once it has oozed away, the memory is gone.
+		The slime mold rejects your human conceptions of paths and plans, it <span className="text-emerald-400 italic">becomes</span> the path.
               </p>
               <p className="mb-4">
-                <span className="text-white">anything.sh</span> is that, but worse. It's a bash script that rewrites itself while running. You type a request. It consults an LLM. The response — raw, executable bash — gets <span className="italic">appended to the script's own body</span> and executed immediately.
+                <span className="text-white">anything.sh</span> is that, but worse. 
+		It's a bash script that rewrites itself while running. 
+		You type a request. It consults an LLM. 
+		The response — raw, executable bash — gets <span className="italic">appended to the script's own body</span> and executed immediately.
               </p>
               <p className="mb-4">
                 The script grows. It <span className="text-emerald-400">pulses</span>. It reaches toward your intent like cytoplasm flowing toward food. One moment it's 50 lines. Then it's 200. Then it's whatever it needs to be.
@@ -314,7 +320,8 @@ export default function AnythingSH() {
                 Beauty without architecture. Order without structure. Risk without reward.
               </p>
               <p className="mb-4 text-zinc-500 italic">
-                "Traditional automation is a machine," the naturalist observed, lowering his voice so as not to startle it. "But this... this is <span className="text-white">biological logic</span>."
+                > "Traditional automation is a machine," the naturalist observed, lowering his voice so as not to startle it. "But this... this is <span className="text-white">biological logic</span>."
+		<span className="pl-4 block italic text-zinc-200">&mdash; some LLM trippin' balls</span>
               </p>
               <p>
                 When you press Ctrl+C, the evolved script is archived (a fossil record of computation) and the original is restored. The loop closes. <span className="text-zinc-500">Until next time.</span>
