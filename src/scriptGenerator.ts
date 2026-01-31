@@ -23,7 +23,7 @@ CODE STRUCTURE (required):
 Example for step 2:
   SCORE=0  # global - persists across steps
   helper() { echo "I persist"; }
-  step2() { helper; SCORE=\$((SCORE+10)); }
+  step2() { helper; SCORE=\\$((SCORE+10)); }
 
 RULES:
 - If you need to check something (installed packages, file contents, etc), set FINAL: false
@@ -258,6 +258,19 @@ _ask() {
     local script_content
     # Strip output sections to keep prompt size manageable - LLM doesn't need to see old output
     script_content=\$(sed '/^# ─.*OUTPUT FROM STEP/,/^# ─\|EOF\|^$/d' "\$SELF" 2>/dev/null || cat "\$SELF")
+    # Truncate very long scripts: keep first/last ~40k tokens (~160k chars each)
+    if [[ \${#script_content} -gt 320000 ]]; then
+        local snipped=\$(( \${#script_content} - 320000 ))
+        script_content="\${script_content:0:160000}
+
+# ═══════════════════════════════════════════════════════════════
+# [SNIPPED: ~\${snipped} characters of middle content removed]
+# The script has grown large. Recent steps below, early steps above.
+# Helper functions from snipped steps are still available at runtime.
+# ═══════════════════════════════════════════════════════════════
+
+\${script_content: -160000}"
+    fi
     if [[ \$AGENT_MODE -eq 1 ]]; then
         agent_context="
 
@@ -593,6 +606,10 @@ _discover_tui() { echo "=== TUI TOOL REFERENCE ==="; for t in gum fzf boxes figl
 
 _ask() {
     local intent="\$1"; local feedback="\${2:-}"; local remaining="\${3:-?}"; local agent_ctx=""; local AGENT_MODE_RULE=""; local script_content; script_content=\$(sed '/^# ─.*OUTPUT FROM STEP/,/^# ─\|EOF\|^$/d' "\$SELF" 2>/dev/null || cat "\$SELF")
+    # Truncate very long scripts: keep first/last ~40k tokens
+    if [[ \${#script_content} -gt 320000 ]]; then local snip=\$((\${#script_content}-320000)); script_content="\${script_content:0:160000}
+# [SNIPPED ~\${snip} chars - helpers still available at runtime]
+\${script_content: -160000}"; fi
     if [[ \$AGENT_MODE -eq 1 ]]; then
         agent_ctx=" AGENT MODE: running non-interactive. No 'read' or interactive tools. FINAL: true step should echo a summary."
     else

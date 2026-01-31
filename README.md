@@ -1,21 +1,7 @@
-# bun-react-template
+# anything.sh
 
-To install dependencies:
+<https://github.com/XertroV/anything.sh>
 
-```bash
-bun install
-```
+Copy or save the script to `~/.local/bin/anything.sh` (or somewhere in `PATH`) and then just run `anything.sh` or `anything.sh "install docker and docker compose"` (or whatever you want it to do). 
 
-To start a development server:
-
-```bash
-bun dev
-```
-
-To run for production:
-
-```bash
-bun start
-```
-
-This project was created using `bun init` in bun v1.3.6. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
+Note: there are different versions of the script for each provider (claude code, groq api, opencode, etc).
