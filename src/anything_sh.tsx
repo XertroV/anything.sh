@@ -138,13 +138,36 @@ const ProviderSelector = ({
   </div>
 );
 
+const EXAMPLE_PROMPTS = [
+  "become something",
+  "text adventure, d&d style with stats",
+  "teach me how to script in fish shell",
+  "compile bitcoind from source",
+  "interactive quiz on linux commands",
+  "ascii art animation of the solar system",
+  "pomodoro timer with notification sounds",
+  "file organizer by type and date",
+  "system monitor dashboard",
+  "random password generator with options",
+];
+
 export default function AnythingSH() {
   const [activeTab, setActiveTab] = useState<'full' | 'compact'>('full');
-  const [provider, setProvider] = useState<ProviderId>('claude');
+  const [provider, setProvider] = useState<ProviderId>(() => {
+    // Load from localStorage on mount
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('anything-provider');
+      if (saved && ALL_PROVIDERS.includes(saved as ProviderId)) {
+        return saved as ProviderId;
+      }
+    }
+    return 'claude';
+  });
   const [copied, setCopied] = useState(false);
   const [urlCopied, setUrlCopied] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [exitMessage] = useState(() => getRandomExitMessage());
+  const [exampleIndex, setExampleIndex] = useState(0);
   const [warningDismissed, setWarningDismissed] = useState(false);
 
   // Load warning dismissed state from localStorage
@@ -163,6 +186,21 @@ export default function AnythingSH() {
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  // Cycle through example prompts
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setExampleIndex((prev) => (prev + 1) % EXAMPLE_PROMPTS.length);
+    }, 3000); // Change every 3 seconds
+    return () => clearInterval(interval);
+  }, []);
+
+  // Persist provider choice to localStorage
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('anything-provider', provider);
+    }
+  }, [provider]);
 
   const handleDismissWarning = () => {
     setWarningDismissed(true);
@@ -238,7 +276,7 @@ export default function AnythingSH() {
             </ManPageSection>
 
             <ManPageSection title="SYNOPSIS">
-              <span className="text-emerald-400">./anything.sh</span> [<span className="text-zinc-500 underline">"become something"</span>]
+              <span className="text-emerald-400">./anything.sh</span> [<span key={exampleIndex} className="text-zinc-500 underline animate-fadeIn">"{EXAMPLE_PROMPTS[exampleIndex]}"</span>]
             </ManPageSection>
 
             <ManPageSection title="DESCRIPTION">

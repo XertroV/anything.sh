@@ -7,9 +7,10 @@ SYSTEM: \$(uname -sm) \$(. /etc/os-release 2>/dev/null && echo "\$PRETTY_NAME" |
 CWD: \$PWD
 DISPLAY: \$([[ -n "\${WAYLAND_DISPLAY:-}" ]] && echo "wayland:\$WAYLAND_DISPLAY" || [[ -n "\${DISPLAY:-}" ]] && echo "x11:\$DISPLAY" || echo "NONE")\$([[ -n "\${SSH_TTY:-}" ]] && echo " [ssh]")
 INSTALLED TUI: \$(for t in whiptail dialog gum fzf figlet toilet cowsay lolcat boxes pv nms chafa glow bat cmatrix slides fastfetch asciinema delta; do command -v \$t &>/dev/null && printf "%s " "\$t"; done)
+\${ANYTHING_EXTRA:+EXTRA: \$ANYTHING_EXTRA}
 
 TASK: \$intent
-TURNS REMAINING: \$remaining (if 1-2, prioritize completing the task or informing user why it can't be done)
+TURNS REMAINING: \$remaining (if 1-2 and this is a long experience, call _continue_journey() to add 16 more; otherwise prioritize completing or informing user why it can't be done)
 \$feedback
 
 OUTPUT FORMAT (exactly 3 lines, then code):
@@ -22,6 +23,7 @@ RULES:
 - If you need to check something (installed packages, file contents, etc), set FINAL: false
 - When FINAL: false, your code runs and stdout/stderr is sent back to you
 - When FINAL: true, task is complete and user is prompted for next task
+- Don't set FINAL: true prematurely - only when the entire task/experience is genuinely complete, not after partial progress
 - No markdown fences, no explanation outside the format above
 - Never include XML, HTML, or markup tags in bash code
 - Declare reusable helper functions globally at the top of your code block - they persist across all steps
