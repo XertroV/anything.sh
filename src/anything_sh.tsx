@@ -139,16 +139,16 @@ const ProviderSelector = ({
 );
 
 const EXAMPLE_PROMPTS = [
-  "become something",
-  "text adventure, d&d style with stats",
-  "teach me how to script in fish shell",
-  "compile bitcoind from source",
-  "interactive quiz on linux commands",
-  "ascii art animation of the solar system",
-  "pomodoro timer with notification sounds",
-  "file organizer by type and date",
-  "system monitor dashboard",
-  "random password generator with options",
+  "build a roguelike dungeon crawler, inspired by Hades and Slay the Spire",
+  "scan my network with nmap, find unknown devices and check their ports",
+  "build an interactive Python game that uses the same autopoietic self-modifying pattern",
+  "teach me shell scripting basics with hands-on interactive examples",
+  "analyze my bash history, find most-used commands and suggest aliases",
+  "clean up all old unused Docker resources, reclaim disk space safely",
+  "create a DNS lookup explainer, trace the path from root to any domain",
+  "find my porn stash, locate video files scattered around and organize them",
+  "build a system health dashboard, real-time CPU memory disk and process stats",
+  "generate a hypnotic terminal screensaver, mesmerizing ASCII animations",
 ];
 
 export default function AnythingSH() {
