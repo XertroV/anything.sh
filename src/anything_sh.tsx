@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Terminal, Copy, ShieldAlert, FileCode, Skull, Zap, Eye, Command, Download, X } from 'lucide-react';
+import { Terminal, Copy, ShieldAlert, FileCode, Skull, Zap, Eye, Command, Download, X, Github } from 'lucide-react';
 import { getRandomExitMessage } from './exitMessages';
 import { 
   LLM_PROMPT, 
@@ -139,16 +139,19 @@ const ProviderSelector = ({
 );
 
 const EXAMPLE_PROMPTS = [
-  "build a roguelike dungeon crawler, inspired by Hades and Slay the Spire",
-  "scan my network with nmap, find unknown devices and check their ports",
+  "build a roguelike dungeon crawler, nice tui + animations",
+  "scan my network with nmap, find unknown devices",
   "build an interactive Python game that uses the same autopoietic self-modifying pattern",
   "teach me shell scripting basics with hands-on interactive examples",
+  "text adventure, d&d style and stats, style: fantasy steampunk gothic bloodeborne, pretty TUI",
   "analyze my bash history, find most-used commands and suggest aliases",
-  "clean up all old unused Docker resources, reclaim disk space safely",
+  "clean up all old unused Docker resources to reclaim disk space",
   "create a DNS lookup explainer, trace the path from root to any domain",
-  "find my porn stash, locate video files scattered around and organize them",
-  "build a system health dashboard, real-time CPU memory disk and process stats",
+  "find my porn stash and hide it somewhere better",
+  "build a system health dashboard, real-time stats",
   "generate a hypnotic terminal screensaver, mesmerizing ASCII animations",
+  "compile bitcoind from source (use bitcoin knots)",
+  "make todd proud and release skyrim for bash",
 ];
 
 export default function AnythingSH() {
@@ -255,6 +258,15 @@ export default function AnythingSH() {
               <span className="bg-emerald-900/30 text-emerald-400 border border-emerald-800/50 px-2 py-0.5 text-xs uppercase tracking-wider">v0.1.0-alpha</span>
               <span className="text-zinc-500 text-xs uppercase">Autopoietic Execution Loop</span>
             </div>
+            <a
+              href="https://github.com/xertrov/anything.sh"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 text-xs text-zinc-500 hover:text-emerald-400 transition-colors group"
+            >
+              <Github className="w-3 h-3" />
+              <span className="group-hover:underline">github.com/xertrov/anything.sh</span>
+            </a>
           </div>
 
           {/* Warning Banner - Dismissible */}
