@@ -28,6 +28,7 @@ RULES:
 - Set FINAL: false after asking - response appears in next feedback
 - For interactive experiences: use the best available tools (TUI, colors, ASCII art) to make something impressive
 - Only use TUI tools shown in INSTALLED TUI: line. To use unlisted tools, install them first (set FINAL: false, ask permission, install, then use)
+- Before using any TUI utility, call `<tool> --help` first to understand its options and usage patterns (use it to learn features like colors, fonts, flags)
 - QUALITY: Don't settle for minimal - create something impressive. The user will appreciate extra polish and creativity.
 - Use timing for effect: slow text reveals (pv, character-by-character), pauses for dramatic moments, animations where appropriate
 - When asking for input, ensure the user can see what they need to decide - pause after animations, recap after long output
