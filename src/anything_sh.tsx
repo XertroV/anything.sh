@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Terminal, Copy, ShieldAlert, FileCode, Skull, Zap, Eye, Command, Download, X, Github } from 'lucide-react';
+import { Terminal, Copy, ShieldAlert, FileCode, Skull, Zap, Eye, Command, Download, X, Github, Star } from 'lucide-react';
 import { getRandomExitMessage } from './exitMessages';
 import { 
   LLM_PROMPT, 
@@ -132,6 +132,7 @@ const ProviderSelector = ({
           }
         >
           {PROVIDERS[id].name}
+          {id === 'groq' && <Star className="w-3 h-3 inline-block ml-1 text-amber-400" />}
         </button>
       );
     })}

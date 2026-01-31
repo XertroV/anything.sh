@@ -87,48 +87,48 @@ TURNS REMAINING: \$remaining (if 1-2 and this is a long experience, call _contin
 export const PROVIDERS = {
   claude: {
     name: 'Claude',
-    cmd: 'claude -p --model sonnet --dangerously-skip-permissions "$full_prompt" </dev/null',
+    cmd: 'claude -p --model sonnet --dangerously-skip-permissions <<< "$full_prompt"',
   },
   codex: {
     name: 'Codex',
-    cmd: 'codex exec "$full_prompt" --full-auto 2>/dev/null',
+    cmd: 'codex exec --full-auto 2>/dev/null <<< "$full_prompt"',
   },
   aider: {
     name: 'Aider',
-    cmd: 'aider --message "$full_prompt" --yes --no-stream 2>/dev/null',
+    cmd: 'aider --message "$(cat)" --yes --no-stream 2>/dev/null <<< "$full_prompt"',
   },
   gemini: {
     name: 'Gemini',
-    cmd: 'gemini -p "$full_prompt" 2>/dev/null',
+    cmd: 'gemini -p 2>/dev/null <<< "$full_prompt"',
   },
   goose: {
     name: 'Goose',
-    cmd: 'goose run -t "$full_prompt" 2>/dev/null',
+    cmd: 'goose run 2>/dev/null <<< "$full_prompt"',
   },
   continue: {
     name: 'Continue',
-    cmd: 'cn -p "$full_prompt" --allow Write --allow Bash 2>/dev/null',
+    cmd: 'cn -p --allow Write --allow Bash 2>/dev/null <<< "$full_prompt"',
   },
   opencode: {
     name: 'OpenCode',
-    cmd: 'opencode run "$full_prompt" 2>/dev/null',
+    cmd: 'opencode run 2>/dev/null <<< "$full_prompt"',
   },
   kimi: {
     name: 'Kimi',
-    cmd: 'kimi --print --command "$full_prompt" 2>/dev/null',
+    cmd: 'kimi --print 2>/dev/null <<< "$full_prompt"',
   },
   groq: {
     name: 'Groq API',
     cmd: `curl -s https://api.groq.com/openai/v1/chat/completions \\
       -H "Authorization: Bearer \$GROQ_API_KEY" -H "Content-Type: application/json" \\
-      -d "\$(jq -n --arg p \"\$full_prompt\" '{model:"moonshotai/kimi-k2-instruct-0905",messages:[{role:"user",content:\$p}],temperature:0.7,max_tokens:4096}')" \\
+      -d "\$(echo "\$full_prompt" | jq -Rs '{model:"moonshotai/kimi-k2-instruct-0905",messages:[{role:"user",content:.}],temperature:0.7,max_tokens:4096}')" \\
       | jq -r '.choices[0].message.content // empty'`,
   },
   openrouter: {
     name: 'OpenRouter',
     cmd: `curl -s https://openrouter.ai/api/v1/chat/completions \\
       -H "Authorization: Bearer \$OPENROUTER_API_KEY" -H "Content-Type: application/json" \\
-      -d "\$(jq -n --arg p \"\$full_prompt\" '{model:"anthropic/claude-3.5-sonnet",messages:[{role:"user",content:\$p}],max_tokens:4096}')" \\
+      -d "\$(echo "\$full_prompt" | jq -Rs '{model:"anthropic/claude-3.5-sonnet",messages:[{role:"user",content:.}],max_tokens:4096}')" \\
       | jq -r '.choices[0].message.content // empty'`,
   },
 } as const;
