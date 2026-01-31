@@ -77,7 +77,7 @@ TURNS REMAINING: \$remaining (if 1-2 and this is a long experience, call _contin
 export const PROVIDERS = {
   claude: {
     name: 'Claude',
-    cmd: 'claude -p "$full_prompt" --model sonnet --dangerously-skip-permissions 2>/dev/null',
+    cmd: 'claude -p --model sonnet --dangerously-skip-permissions "$full_prompt" </dev/null 2>/dev/null',
   },
   codex: {
     name: 'Codex',
@@ -132,6 +132,12 @@ export const ALL_PROVIDERS: ProviderId[] = [
 ];
 
 // Generate full script with provider-specific CLI command
+//
+// IMPORTANT: Backtick escaping in grep patterns
+// When matching markdown fences (```), use single-escaped backticks: '^\`\`\`'
+// Do NOT use triple-escaped: '^\\\`\\\`\\\`' - this produces '\`\`\`' in bash,
+// which grep BRE treats as undefined behavior and matches EVERYTHING,
+// causing valid code to be stripped and "empty response" errors.
 export const getScriptFull = (provider: ProviderId) => `#!/bin/bash
 # ╔════════════════════════════════════════════════════════════════╗
 # ║  anything.sh - Autopoietic Self-Modifying Execution Loop       ║
@@ -239,12 +245,12 @@ AGENT MODE: This script is running with -a/--agent flag (non-interactive).
 - Example: echo 'Created fib() function in ./lib/math.sh'"
     else
         AGENT_MODE_RULE="- AGENT MODE: The script supports -a/--agent flag for non-interactive execution. When generating code that will call anything.sh with -a/--agent, your FINAL: true step should echo a summary of what was created/modified.
-- In the first step, discover available TUI utilities AND call `<tool> --help` on each to understand their options (colors, fonts, flags) before building the experience"
+- In the first step, discover available TUI utilities AND call \\\`<tool> --help\\\` on each to understand their options (colors, fonts, flags) before building the experience"
     fi
     local full_prompt
-    read -r -d '' full_prompt <<PROMPT
+    read -r -d '' full_prompt <<_ANYTHING_PROMPT_EOF_
 ${LLM_PROMPT}\$agent_context
-PROMPT
+_ANYTHING_PROMPT_EOF_
 
     ${PROVIDERS[provider].cmd}
 }
@@ -334,9 +340,9 @@ PREVIOUS STEP OUTPUT (exit code \$prev_exit):
         is_final="true"
     fi
 
-    # Strip markdown fences if present
-    if echo "\$code" | grep -q '^\\\`\\\`\\\`'; then
-        code=\$(echo "\$code" | sed -n '/^\\\`\\\`\\\`/,/^\\\`\\\`\\\`/p' | sed '/^\\\`\\\`\\\`/d')
+    # Strip markdown fences if present (see TS comment above for escaping notes)
+    if echo "\$code" | grep -q '^\`\`\`'; then
+        code=\$(echo "\$code" | sed -n '/^\`\`\`/,/^\`\`\`/p' | sed '/^\`\`\`/d')
     fi
 
     if [[ -z "\$code" ]]; then
@@ -438,185 +444,6 @@ _evolve_continue() {
 }
 
 # ─────────────────────────────────────────────────────────────────
-# EVOLVE: Iterative code generation with feedback loop (LEGACY - kept for reference)
-# ─────────────────────────────────────────────────────────────────
-_evolve() {
-    local intent="$1"
-    local feedback=""
-    local is_final="false"
-    local iteration=0
-    local output=""
-    local exit_code=0
-
-    # Remove trailing _prompt and # from script (so reruns replay without prompting)
-    sed -i '/^_prompt$/,/^#$/d' "$SELF"
-
-    while [[ "$is_final" != "true" && $iteration -lt $((MAX_ITER + BONUS_ITER)) ]]; do
-        ((iteration++))
-        ((STEP++))
-        local remaining=$((MAX_ITER + BONUS_ITER - iteration))
-
-        # Start spinner
-        _spinner &
-        SPINNER_PID=$!
-
-        local response=$(_ask "$intent" "$feedback" "$remaining")
-
-        # Stop spinner
-        kill \$SPINNER_PID 2>/dev/null
-        wait \$SPINNER_PID 2>/dev/null
-        SPINNER_PID=""
-        printf "\\r\\033[K"
-
-        # Parse structured response
-        is_final=$(echo "$response" | grep -i '^FINAL:' | head -1 | sed 's/^FINAL:[[:space:]]*//' | tr '[:upper:]' '[:lower:]')
-        local description=$(echo "$response" | grep -i '^DESCRIPTION:' | head -1 | sed 's/^DESCRIPTION:[[:space:]]*//')
-        local code=$(echo "$response" | sed -n '/^BASH_CODE:/,$ { /^BASH_CODE:/d; p }')
-
-        # Fallback: if no structured format, treat whole response as code
-        if [[ -z "$code" ]]; then
-            code="$response"
-            description="$intent"
-            is_final="true"
-        fi
-
-        # Strip markdown fences if present
-        if echo "$code" | grep -q '^\`\`\`'; then
-            code=$(echo "$code" | sed -n '/^\`\`\`/,/^\`\`\`/p' | sed '/^\`\`\`/d')
-        fi
-
-        if [[ -z "$code" ]]; then
-            echo -e "\\033[31m[error]\\033[0m empty response"
-            return 1
-        fi
-
-        echo -e "\\033[32m[step $STEP]\\033[0m $description"
-        local lines=$(echo "$code" | wc -l)
-        echo -e "\\033[33m[+$lines lines]\\033[0m"
-
-        # Append just the step header + code (output comments already appended after execution)
-        cat >> "$SELF" <<EVOLUTION
-
-# ═══════════════════════════════════════════════════════════════
-# STEP $STEP: $description
-# Generated: $(date '+%Y-%m-%d %H:%M:%S') | FINAL: $is_final
-# ═══════════════════════════════════════════════════════════════
-$code
-EVOLUTION
-
-        # Execute with PTY (supports interactive programs like whiptail/dialog)
-        echo -e "\\033[36m[running...]\\033[0m"
-        local tmpfile=\$(mktemp) codefile=\$(mktemp)
-        printf '%s' "\$code" > "\$codefile"
-        if [[ \$AGENT_MODE -eq 1 ]]; then
-            # Agent mode: real-time output to stderr with > prefix to show it's a subagent
-            if [[ "\$(uname)" == "Darwin" ]]; then
-                script -q "\$tmpfile" bash "\$codefile" | sed 's/^/> /' >&\$AGENT_REALTIME_FD
-            else
-                script -q -e -c "bash '\$codefile'" "\$tmpfile" | sed 's/^/> /' >&\$AGENT_REALTIME_FD
-            fi
-            exit_code=\${PIPESTATUS[0]}
-        else
-            if [[ "\$(uname)" == "Darwin" ]]; then
-                script -q "\$tmpfile" bash "\$codefile"
-            else
-                script -q -e -c "bash '\$codefile'" "\$tmpfile"
-            fi
-            exit_code=\$?
-        fi
-        rm -f "\$codefile"
-        # Clean ANSI codes for LLM feedback (script captures control sequences)
-        output=\$(perl -pe 's/\\e\\[[0-9;]*[mGKHJF]//g; s/\\r\\n/\\n/g; s/\\r//g' "\$tmpfile" 2>/dev/null || cat "\$tmpfile")
-        rm -f "\$tmpfile"
-        [[ \$exit_code -ne 0 ]] && echo -e "\\033[31m[exit \$exit_code]\\033[0m"
-
-        # Immediately append output as comments to script (before LLM call, in case of crash)
-        # Skip in agent mode - output already forwarded to parent
-        if [[ \$AGENT_MODE -eq 0 && -n "\$output" ]]; then
-            local output_lines=\$(echo "\$output" | wc -l)
-            if [[ \$output_lines -gt 1000 ]]; then
-                # Truncate: keep first 400 and last 400 lines
-                {
-                    echo ""
-                    echo "# ───────────────────────────────────────────────────────────────"
-                    echo "# OUTPUT FROM PREVIOUS STEP:"
-                    echo "# ───────────────────────────────────────────────────────────────"
-                    echo "\$output" | head -400 | uniq | sed 's/^/# /'
-                    echo "#"
-                    echo "# [...\$((output_lines - 800)) lines snipped...]"
-                    echo "#"
-                    echo "\$output" | tail -400 | uniq | sed 's/^/# /'
-                } >> "\$SELF"
-            else
-                {
-                    echo ""
-                    echo "# ───────────────────────────────────────────────────────────────"
-                    echo "# OUTPUT FROM PREVIOUS STEP:"
-                    echo "# ───────────────────────────────────────────────────────────────"
-                    echo "\$output" | uniq | sed 's/^/# /'
-                } >> "\$SELF"
-            fi
-        fi
-
-        if [[ "$is_final" != "true" ]]; then
-            feedback="
-PREVIOUS STEP OUTPUT (exit code $exit_code):
-$output
-"
-        elif [[ $exit_code -ne 0 && $exit_code -ne 141 && $iteration -lt $MAX_ITER ]]; then
-            # Final step failed - give LLM a chance to recover
-            echo -e "\\033[33m[final step failed, attempting recovery...]\\033[0m"
-            is_final="false"
-            feedback="
-FINAL STEP FAILED (exit code $exit_code):
-$output
-
-Please diagnose the issue and fix it. You may need to install additional dependencies or use different parameters.
-"
-        fi
-    done
-
-    # Check if we hit max iterations without completing
-    if [[ "$is_final" != "true" ]]; then
-        if [[ \$AGENT_MODE -eq 1 ]]; then
-            echo -e "\\033[31m[error]\\033[0m Max iterations reached without completion" >&2
-            exit 1
-        fi
-        echo -e "\\033[33m[max iterations reached]\\033[0m Task incomplete after $iteration steps."
-        read -rp $'\\033[95m  continue? [Y/n] \\033[0m' cont
-        if [[ -z "$cont" || "$cont" =~ ^[Yy] ]]; then
-            iteration=0
-            _evolve "$intent"  # Recursive call to continue
-            return
-        fi
-        echo -e "\\033[36m[stopped]\\033[0m You can retry or try a different approach."
-    fi
-
-    # In agent mode, return the final output and exit
-    if [[ \$AGENT_MODE -eq 1 ]]; then
-        if [[ \$exit_code -ne 0 ]]; then
-            # On error, output to stderr with > prefix
-            echo "\$output" | sed 's/^/> /' >&2
-            exit \$exit_code
-        else
-            # Success output to stdout with @ prefix
-            echo "\$output" | sed 's/^/@ /'
-            exit 0
-        fi
-    fi
-
-    # Append _prompt for next user input (for re-runs of the script)
-    cat >> "$SELF" <<'PROMPT_MARKER'
-
-_prompt
-#
-PROMPT_MARKER
-
-    # Continue interactive loop
-    _prompt
-}
-
-# ─────────────────────────────────────────────────────────────────
 # PROMPT: Interactive input loop
 # ─────────────────────────────────────────────────────────────────
 _prompt() {
@@ -667,12 +494,7 @@ if [[ \$AGENT_MODE -eq 1 ]]; then
 else
     [[ -n "\${1:-}" ]] && _evolve_step "\$1" "" 1 0 || _prompt
 fi
-# ─────────────────────────────────────────────────────────────────
-# PADDING: Bash reads files in chunks (~8KB). This padding ensures
-# bash hasn't reached EOF when we append code, so appended code
-# executes naturally. New code is appended after this padding.
-# ─────────────────────────────────────────────────────────────────
-${Array(100).fill('#'.repeat(80)).join('\n')}
+# END OF ORIGINAL SCRIPT - appended code follows
 `;
 
 // Generate compact script with provider-specific CLI command
@@ -703,7 +525,7 @@ _ask() {
         agent_ctx=" AGENT MODE: running non-interactive. No 'read' or interactive tools. FINAL: true step should echo a summary."
     else
         AGENT_MODE_RULE="- AGENT MODE: The script supports -a/--agent flag for non-interactive execution.
-- In the first step, discover available TUI utilities AND call `<tool> --help` on each to understand their options (colors, fonts, flags) before building the experience"
+- In the first step, discover available TUI utilities AND call \\\`<tool> --help\\\` on each to understand their options (colors, fonts, flags) before building the experience"
     fi
     local full_prompt
     read -r -d '' full_prompt <<PROMPT
