@@ -729,6 +729,10 @@ video {
   max-width: 80rem;
 }
 
+.flex-1 {
+  flex: 1 1 0%;
+}
+
 .flex-shrink-0 {
   flex-shrink: 0;
 }
@@ -906,6 +910,11 @@ video {
 
 .bg-zinc-900\/50 {
   background-color: rgb(24 24 27 / 0.5);
+}
+
+.bg-zinc-950 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(9 9 11 / var(--tw-bg-opacity, 1));
 }
 
 .bg-\[linear-gradient\(rgba\(18\2c 16\2c 16\2c 0\)_50\%\2c rgba\(0\2c 0\2c 0\2c 0\.25\)_50\%\)\2c linear-gradient\(90deg\2c rgba\(255\2c 0\2c 0\2c 0\.06\)\2c rgba\(0\2c 255\2c 0\2c 0\.02\)\2c rgba\(0\2c 0\2c 255\2c 0\.06\)\)\] {
@@ -1232,6 +1241,16 @@ video {
 .active\:translate-y-0\.5:active {
   --tw-translate-y: 0.125rem;
   transform: translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y));
+}
+
+@media (min-width: 640px) {
+  .sm\:flex-row {
+    flex-direction: row;
+  }
+
+  .sm\:items-center {
+    align-items: center;
+  }
 }
 
 @media (min-width: 768px) {
