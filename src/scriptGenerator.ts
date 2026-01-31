@@ -28,7 +28,6 @@ RULES:
 - Set FINAL: false after asking - response appears in next feedback
 - For interactive experiences: use the best available tools (TUI, colors, ASCII art) to make something impressive
 - Only use TUI tools shown in INSTALLED TUI: line. To use unlisted tools, install them first (set FINAL: false, ask permission, install, then use)
-- In the first step, discover available TUI utilities AND call `<tool> --help` on each to understand their options (colors, fonts, flags) before building the experience
 - QUALITY: Don't settle for minimal - create something impressive. The user will appreciate extra polish and creativity.
 - Use timing for effect: slow text reveals (pv, character-by-character), pauses for dramatic moments, animations where appropriate
 - When asking for input, ensure the user can see what they need to decide - pause after animations, recap after long output
@@ -237,7 +236,8 @@ AGENT MODE: This script is running with -a/--agent flag (non-interactive).
 - This summary will be captured and returned to the parent script
 - Example: echo 'Created fib() function in ./lib/math.sh'"
     else
-        AGENT_MODE_RULE="- AGENT MODE: The script supports -a/--agent flag for non-interactive execution. When generating code that will call anything.sh with -a/--agent, your FINAL: true step should echo a summary of what was created/modified."
+        AGENT_MODE_RULE="- AGENT MODE: The script supports -a/--agent flag for non-interactive execution. When generating code that will call anything.sh with -a/--agent, your FINAL: true step should echo a summary of what was created/modified.
+- In the first step, discover available TUI utilities AND call `<tool> --help` on each to understand their options (colors, fonts, flags) before building the experience"
     fi
     local full_prompt
     read -r -d '' full_prompt <<PROMPT
@@ -528,7 +528,8 @@ _ask() {
     if [[ \$AGENT_MODE -eq 1 ]]; then
         agent_ctx=" AGENT MODE: running non-interactive. No 'read' or interactive tools. FINAL: true step should echo a summary."
     else
-        AGENT_MODE_RULE="- AGENT MODE: The script supports -a/--agent flag for non-interactive execution."
+        AGENT_MODE_RULE="- AGENT MODE: The script supports -a/--agent flag for non-interactive execution.
+- In the first step, discover available TUI utilities AND call `<tool> --help` on each to understand their options (colors, fonts, flags) before building the experience"
     fi
     local full_prompt
     read -r -d '' full_prompt <<PROMPT
