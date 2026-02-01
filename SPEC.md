@@ -4,7 +4,7 @@
 
 **anything.sh** is a self-modifying bash script that uses LLM coding assistants to generate code that gets appended to itself during execution. The project consists of a website that showcases and allows users to copy these scripts.
 
-The script follows the "Ouroboros pattern" - a snake eating its own tail - where the script grows longer with each user command, creating a permanent audit trail of its own evolution.
+The script follows an autopoietic pattern where it grows longer with each user command, creating a permanent audit trail of its own evolution.
 
 ## Core Concept
 

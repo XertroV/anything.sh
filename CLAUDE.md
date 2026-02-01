@@ -1,6 +1,6 @@
 # anything.sh
 
-A self-modifying bash script website showcasing the Ouroboros pattern: a bash script that uses the Claude CLI to generate code that appends to itself.
+A self-modifying bash script website: a bash script that uses the Claude CLI to generate code that appends to itself.
 
 ## Project Structure
 
