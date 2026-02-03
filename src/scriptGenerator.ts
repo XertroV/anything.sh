@@ -226,7 +226,10 @@ fi
 # ─────────────────────────────────────────────────────────────────
 # CLEANUP: Runs on EXIT - saves script to history, restores original
 # ─────────────────────────────────────────────────────────────────
+_CLEANUP_DONE=0
 _cleanup() {
+    [[ \$_CLEANUP_DONE -eq 1 ]] && return
+    _CLEANUP_DONE=1
     local rc=\$?
     [[ -n "\$SPINNER_PID" ]] && kill "\$SPINNER_PID" 2>/dev/null
     printf "\\r\\033[K" >&2  # Clear spinner line
@@ -244,7 +247,18 @@ _cleanup() {
     fi
     exit \$rc
 }
-trap _cleanup EXIT INT TERM
+_sigint() {
+    echo "" >&2
+    echo -e "\\033[33m[interrupted]\\033[0m" >&2
+    trap - INT TERM EXIT  # Prevent recursive calls and cleanup running twice
+    # Run cleanup first to save history
+    _CLEANUP_DONE=0  # Reset so cleanup actually runs
+    _cleanup
+    # Kill any remaining child processes (safety net)
+    kill 0 2>/dev/null
+}
+trap _cleanup EXIT TERM
+trap _sigint INT
 
 # ─────────────────────────────────────────────────────────────────
 # ORACLE: Query ${PROVIDERS[provider].name} with script context
@@ -444,10 +458,9 @@ PREVIOUS STEP OUTPUT (exit code \$prev_exit):
 # Generated: \$(date '+%Y-%m-%d %H:%M:%S') | FINAL: \$is_final
 # ═══════════════════════════════════════════════════════════════
 \$code
-_rc=0  # Initialize before set -e
-set -e  # Exit on error (including Ctrl+C)
-step\${STEP} < /dev/null > >(tee "\$_OUT") && _rc=0 || _rc=\$?
-set +e
+# Run step with output capture - use pipe instead of process substitution for proper signal handling
+step\${STEP} < /dev/null 2>&1 | tee "\$_OUT" || true
+_rc=\${PIPESTATUS[0]}
 _evolve_continue "\$intent" "\\$_rc" "\$is_final" "\$STEP"
 EVOLUTION
 
@@ -602,8 +615,11 @@ if [[ \$AGENT_MODE -eq 1 && -n "\${1:-}" ]]; then TEMP="./anything_agent_\$\$.sh
 
 # Backup & cleanup
 [[ "$SELF" == "\${ANYTHING_ORIGINAL}" && ! -f "$ORIG" ]] && cp "$SELF" "$ORIG"
-_cleanup() { [[ -n "\$SPINNER_PID" ]] && kill "\$SPINNER_PID" 2>/dev/null; printf "\\r\\033[K" >&2; mkdir -p "\$HOME/.anything/history" 2>/dev/null; mv "$SELF" "\$HOME/.anything/history/\${SELF##*/}" 2>/dev/null; echo -e "\\n\\033[36m[saved]\\033[0m \$HOME/.anything/history/\${SELF##*/}"; [[ -f "$ORIG" ]] && { cp "$ORIG" "\${ANYTHING_ORIGINAL}" 2>/dev/null; rm -f "$ORIG" 2>/dev/null; echo -e "\\033[36m[restored]\\033[0m \${ANYTHING_ORIGINAL}"; }; }
-trap _cleanup EXIT INT TERM
+_CLEANUP_DONE=0
+_cleanup() { [[ \$_CLEANUP_DONE -eq 1 ]] && return; _CLEANUP_DONE=1; [[ -n "\$SPINNER_PID" ]] && kill "\$SPINNER_PID" 2>/dev/null; printf "\\r\\033[K" >&2; mkdir -p "\$HOME/.anything/history" 2>/dev/null; mv "$SELF" "\$HOME/.anything/history/\${SELF##*/}" 2>/dev/null; echo -e "\\n\\033[36m[saved]\\033[0m \$HOME/.anything/history/\${SELF##*/}"; [[ -f "$ORIG" ]] && { cp "$ORIG" "\${ANYTHING_ORIGINAL}" 2>/dev/null; rm -f "$ORIG" 2>/dev/null; echo -e "\\033[36m[restored]\\033[0m \${ANYTHING_ORIGINAL}"; }; }
+_sigint() { echo -e "\\n\\033[33m[interrupted]\\033[0m" >&2; trap - INT TERM EXIT; _CLEANUP_DONE=0; _cleanup; kill 0 2>/dev/null; }
+trap _cleanup EXIT TERM
+trap _sigint INT
 _continue_journey() { BONUS_ITER=\$((BONUS_ITER + 16)); echo -e "\\033[36m[+16 iterations]\\033[0m"; }
 _spin() { while :; do for c in · ·· ··· ···· ····· ' ····' '  ···' '   ··' '    ·' '     '; do printf "\\r\\033[36m%s\\033[0m" "\$c" >&2; sleep .1; done; done; }
 _discover_tui() { echo "=== TUI TOOL REFERENCE ==="; for t in gum fzf boxes figlet toilet cowsay; do command -v "\$t" &>/dev/null || continue; echo "--- \$t ---"; "\$t" --help 2>&1|head -30; case "\$t" in boxes) echo "Designs:"; boxes -l 2>&1|awk '/^[a-z]/{print \$1}'|head -20|tr '\\n' ' '; echo;; gum) echo "Subcommands: choose input confirm spin style filter pager write";; esac; echo; done; echo "=== END TUI REFERENCE ==="; }
@@ -658,10 +674,8 @@ _evolve_step() {
 
 # STEP \$STEP: \$desc | FINAL: \$is_final
 \$code
-_rc=0  # Initialize before set -e
-set -e  # Exit on error (including Ctrl+C)
-step\${STEP} < /dev/null > >(tee "\$_OUT") && _rc=0 || _rc=\$?
-set +e
+step\${STEP} < /dev/null 2>&1 | tee "\$_OUT" || true
+_rc=\${PIPESTATUS[0]}
 _evolve_continue "\$intent" "\\$_rc" "\$is_final" "\$STEP"
 EVOLUTION
     return
