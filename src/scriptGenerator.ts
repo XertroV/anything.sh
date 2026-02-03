@@ -224,24 +224,23 @@ fi
 [[ "$SELF" == "\${ANYTHING_ORIGINAL}" && ! -f "$ORIG" ]] && cp "$SELF" "$ORIG" && echo -e "\\033[36m[backup]\\033[0m $ORIG"
 
 # ─────────────────────────────────────────────────────────────────
-# CLEANUP: Runs on EXIT - archives session, restores original
+# CLEANUP: Runs on EXIT - saves script to history, restores original
 # ─────────────────────────────────────────────────────────────────
 _cleanup() {
     local rc=\$?
     [[ -n "\$SPINNER_PID" ]] && kill "\$SPINNER_PID" 2>/dev/null
     printf "\\r\\033[K" >&2  # Clear spinner line
-    [[ -f "$ORIG" ]] || return \$rc
-    local archive="\${SELF%.sh}_\$(date +%Y%m%d_%H%M%S).log.sh"
-    cp "$SELF" "\$archive" 2>/dev/null || true
-    # Only restore original if this is the original script, not an agent temp copy
-    if [[ "$SELF" == "\${ANYTHING_ORIGINAL}" ]]; then
-        cp "$ORIG" "$SELF" 2>/dev/null || true
-        echo ""
-        echo -e "\\033[36m[archived]\\033[0m \$archive"
-        echo -e "\\033[36m[restored]\\033[0m $SELF"
-    else
-        # Agent mode temp copy - just archive, don't restore
-        echo -e "\\033[36m[archived]\\033[0m \$archive"
+    local history_dir="\$HOME/.anything/history"
+    mkdir -p "\$history_dir" 2>/dev/null
+    local dest="\$history_dir/\${SELF##*/}"
+    mv "$SELF" "\$dest" 2>/dev/null
+    echo ""
+    echo -e "\\033[36m[saved]\\033[0m \$dest"
+    # Restore original if this was a non-localized run
+    if [[ -f "$ORIG" ]]; then
+        cp "$ORIG" "\${ANYTHING_ORIGINAL}" 2>/dev/null || true
+        rm -f "$ORIG" 2>/dev/null
+        echo -e "\\033[36m[restored]\\033[0m \${ANYTHING_ORIGINAL}"
     fi
     exit \$rc
 }
@@ -537,7 +536,7 @@ _prompt() {
     local input
     if command -v gum &>/dev/null; then
         # gum supports multiline editing, backspace over newlines, etc.
-        input=\$(gum input --placeholder "what shall I become?" --width 60) || exit 0
+        input=\$(gum input --placeholder "what shall I become? (empty input -> exit)" --width 60) || exit 0
         echo -e "\\033[95m  → \\033[0m\$input"
     else
         read -rp \$'\\033[95m  what shall I become? \\033[0m' input || exit 0
@@ -603,7 +602,7 @@ if [[ \$AGENT_MODE -eq 1 && -n "\${1:-}" ]]; then TEMP="./anything_agent_\$\$.sh
 
 # Backup & cleanup
 [[ "$SELF" == "\${ANYTHING_ORIGINAL}" && ! -f "$ORIG" ]] && cp "$SELF" "$ORIG"
-_cleanup() { [[ -n "\$SPINNER_PID" ]] && kill "\$SPINNER_PID" 2>/dev/null; printf "\\r\\033[K" >&2; cp "$SELF" "\${SELF%.sh}_\$(date +%s).log.sh"; [[ "$SELF" == "\${ANYTHING_ORIGINAL}" ]] && cp "$ORIG" "$SELF"; echo -e "\\n\\033[36m[saved]\\033[0m"; }
+_cleanup() { [[ -n "\$SPINNER_PID" ]] && kill "\$SPINNER_PID" 2>/dev/null; printf "\\r\\033[K" >&2; mkdir -p "\$HOME/.anything/history" 2>/dev/null; mv "$SELF" "\$HOME/.anything/history/\${SELF##*/}" 2>/dev/null; echo -e "\\n\\033[36m[saved]\\033[0m \$HOME/.anything/history/\${SELF##*/}"; [[ -f "$ORIG" ]] && { cp "$ORIG" "\${ANYTHING_ORIGINAL}" 2>/dev/null; rm -f "$ORIG" 2>/dev/null; echo -e "\\033[36m[restored]\\033[0m \${ANYTHING_ORIGINAL}"; }; }
 trap _cleanup EXIT INT TERM
 _continue_journey() { BONUS_ITER=\$((BONUS_ITER + 16)); echo -e "\\033[36m[+16 iterations]\\033[0m"; }
 _spin() { while :; do for c in · ·· ··· ···· ····· ' ····' '  ···' '   ··' '    ·' '     '; do printf "\\r\\033[36m%s\\033[0m" "\$c" >&2; sleep .1; done; done; }
