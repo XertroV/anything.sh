@@ -1,3 +1,4 @@
+
 # anything.sh
 
 <https://github.com/XertroV/anything.sh>
@@ -16,4 +17,12 @@ anything.sh "teach me how to script for the fish shell"
 anything.sh "make todd proud and release skyrim for bash, immersive TUI, atmospheric, action RPG"
 anything.sh "set git to use different ed25519 key"
 anything.sh "install docker and docker compose"
+```
+
+## Build & Install
+
+```
+bun install
+bun run build
+cp dist/claude/full/anything.sh ~/.local/bin/anything.sh
 ```
