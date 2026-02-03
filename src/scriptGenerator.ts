@@ -385,7 +385,7 @@ PREVIOUS STEP OUTPUT (exit code \$prev_exit):
     fi
 
     # Start spinner and timer
-    local start_time=\$(date +%s.%N)
+    local start_time=\$(date +%s)
     _spinner &
     SPINNER_PID=\$!
 
@@ -394,13 +394,12 @@ PREVIOUS STEP OUTPUT (exit code \$prev_exit):
     response=\$(_ask "\$intent" "\$feedback" "\$remaining") || ask_exit=\$?
 
     # Stop spinner and calculate elapsed time
-    local end_time=\$(date +%s.%N)
-    local elapsed=\$(echo "\$end_time - \$start_time" | bc 2>/dev/null || echo "?")
+    local end_time=\$(date +%s)
+    local elapsed=\$((end_time - start_time))
     kill \$SPINNER_PID 2>/dev/null
     wait \$SPINNER_PID 2>/dev/null
     SPINNER_PID=""
     printf "\\r\\033[K" >&2
-    echo -e "\\033[36m[llm \${elapsed}s]\\033[0m"
 
     # Check if LLM CLI failed
     if [[ \$ask_exit -ne 0 ]]; then
@@ -442,6 +441,7 @@ PREVIOUS STEP OUTPUT (exit code \$prev_exit):
     fi
 
     echo -e "\\033[32m[step \$STEP]\\033[0m \$description"
+    echo -e "\\033[36m[llm \${elapsed}s]\\033[0m"
     if [[ \$SHOW_CODE -eq 1 ]]; then
         echo -e "\\033[33m\$code\\033[0m"
     else
@@ -653,8 +653,10 @@ _evolve_step() {
     fi
     STEP=\$step_num; local remaining=\$((MAX_ITER + BONUS_ITER - step_num)) feedback=""
     [[ -n "\$prev_output" ]] && feedback="\\nPREVIOUS STEP OUTPUT (exit code \$prev_exit):\\n\$prev_output\\n"
+    local start_time=\$(date +%s)
     _spin & SPINNER_PID=\$!
     local resp; local ask_exit=0; resp=\$(_ask "\$intent" "\$feedback" "\$remaining") || ask_exit=\$?
+    local elapsed=\$(($(date +%s) - start_time))
     kill \$SPINNER_PID 2>/dev/null; wait \$SPINNER_PID 2>/dev/null; SPINNER_PID=""; printf "\\r\\033[K" >&2
     if [[ \$ask_exit -ne 0 ]]; then echo -e "\\033[31m[error]\\033[0m LLM CLI failed (exit \$ask_exit)"; echo "  LLM CLI may have timed out or hit rate limit."; _prompt; return; fi
     local is_final=\$(echo "\$resp" | grep -i '^FINAL:' | head -1 | sed 's/^FINAL:[[:space:]]*//' | tr '[:upper:]' '[:lower:]')
@@ -669,6 +671,7 @@ _evolve_step() {
         _evolve_step "\$intent" "SYNTAX ERROR:\\n\$syn_err\\nFix and define _step\${STEP}() properly." \$((step_num + 1)) "1"; return
     fi
     echo -e "\\033[32m[step \$STEP]\\033[0m \$desc"
+    echo -e "\\033[36m[llm \${elapsed}s]\\033[0m"
     if [[ \$SHOW_CODE -eq 1 ]]; then echo -e "\\033[33m\$code\\033[0m"; else echo -e "\\033[33m[+\$(echo "\$code" | wc -l) lines]\\033[0m"; fi
     cat >> "\$SELF" <<EVOLUTION
 
