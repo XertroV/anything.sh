@@ -67,7 +67,7 @@ step1() { check_deps; }
 
 EXAMPLE (step 2 - after seeing output):
 FINAL: true
-DESCRIPTION: Install figlet
+DESCRIPTION: Install figlet (assuming OS = archlinux)
 BASH_CODE:
 step2() { sudo pacman -S --noconfirm figlet && figlet "Hello"; }
 
