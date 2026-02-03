@@ -169,7 +169,7 @@ export const getScriptFull = (provider: ProviderId) => `#!/bin/bash
 # ║  Home: https://xertrov.github.io/anything.sh/                  ║
 # ║  Current Provider: ${PROVIDERS[provider].name.padEnd(41)}   ║
 # ╚════════════════════════════════════════════════════════════════╝
-# USAGE: ./anything.sh ["initial prompt"]
+# USAGE: ./anything.sh [-c|--code] [-a|--agent] ["initial prompt"]
 
 set -uo pipefail  # -e disabled: we handle errors manually
 
@@ -184,6 +184,7 @@ BONUS_ITER=0  # Extra iterations granted via _continue_journey()
 SPINNER_PID=""  # Track spinner for cleanup
 AGENT_MODE=0  # Set to 1 with -a/--agent flag for non-interactive execution
 AGENT_REALTIME_FD=2  # Agent real-time output: 2=stderr, or use /dev/tty
+SHOW_CODE=0  # Set to 1 with -c/--code flag to print generated code
 _OUT="/tmp/anything_out_\$\$"  # Stdout capture file for same-process execution
 
 # ─────────────────────────────────────────────────────────────────
@@ -205,7 +206,7 @@ fi
 # ─────────────────────────────────────────────────────────────────
 # ARGUMENT PARSING: Handle -a/--agent flag
 # ─────────────────────────────────────────────────────────────────
-while [[ \$# -gt 0 ]]; do case "$1" in -a|--agent) AGENT_MODE=1; shift ;; --) shift; break ;; -*) echo -e "\\033[31m[error]\\033[0m Unknown: $1" >&2; exit 1 ;; *) break ;; esac; done
+while [[ \$# -gt 0 ]]; do case "$1" in -a|--agent) AGENT_MODE=1; shift ;; -c|--code) SHOW_CODE=1; shift ;; --) shift; break ;; -*) echo -e "\\033[31m[error]\\033[0m Unknown: $1" >&2; exit 1 ;; *) break ;; esac; done
 
 # ─────────────────────────────────────────────────────────────────
 # AGENT MODE: Create temp copy and exec for non-interactive execution
@@ -428,8 +429,12 @@ PREVIOUS STEP OUTPUT (exit code \$prev_exit):
     fi
 
     echo -e "\\033[32m[step \$STEP]\\033[0m \$description"
-    local lines=\$(echo "\$code" | wc -l)
-    echo -e "\\033[33m[+\$lines lines]\\033[0m"
+    if [[ \$SHOW_CODE -eq 1 ]]; then
+        echo -e "\\033[33m\$code\\033[0m"
+    else
+        local lines=\$(echo "\$code" | wc -l)
+        echo -e "\\033[33m[+\$lines lines]\\033[0m"
+    fi
 
     # Append step code directly (not wrapped) - helper functions at top level persist across steps
     # LLM defines step\${STEP}() in the code, we call it with output capture
@@ -583,7 +588,7 @@ fi
 export const getScriptCompact = (provider: ProviderId) => `#!/bin/bash
 # anything.sh [compact] · ${PROVIDERS[provider].name}
 set -uo pipefail
-SELF="$0"; ORIG="\${SELF}.orig"; STEP=0; MAX_ITER=160; BONUS_ITER=0; SPINNER_PID=""; AGENT_MODE=0; AGENT_REALTIME_FD=2
+SELF="$0"; ORIG="\${SELF}.orig"; STEP=0; MAX_ITER=160; BONUS_ITER=0; SPINNER_PID=""; AGENT_MODE=0; AGENT_REALTIME_FD=2; SHOW_CODE=0
 _OUT="/tmp/anything_out_\$\$"
 [[ -z "\${ANYTHING_ORIGINAL:-}" ]] && export ANYTHING_ORIGINAL="$SELF"
 
@@ -591,7 +596,7 @@ _OUT="/tmp/anything_out_\$\$"
 if [[ "$SELF" == *"/bin/"* && ! -f "$ORIG" ]]; then LOCAL="./anything_\$(date +%Y%m%d_%H%M%S).sh"; cp "$SELF" "$LOCAL"; chmod +x "$LOCAL"; echo -e "\\033[36m[localized]\\033[0m $LOCAL"; exec "$LOCAL" "\$@"; fi
 
 # Parse args
-POSITIONAL=(); while [[ \$# -gt 0 ]]; do case "\$1" in -a|--agent) AGENT_MODE=1; shift ;; --) shift; break ;; -*) echo "[error] Unknown: \$1" >&2; exit 1 ;; *) POSITIONAL+=("\$1"); shift ;; esac; done; set -- "\${POSITIONAL[@]}"
+POSITIONAL=(); while [[ \$# -gt 0 ]]; do case "\$1" in -a|--agent) AGENT_MODE=1; shift ;; -c|--code) SHOW_CODE=1; shift ;; --) shift; break ;; -*) echo "[error] Unknown: \$1" >&2; exit 1 ;; *) POSITIONAL+=("\$1"); shift ;; esac; done; set -- "\${POSITIONAL[@]}"
 
 # Agent mode temp copy
 if [[ \$AGENT_MODE -eq 1 && -n "\${1:-}" ]]; then TEMP="./anything_agent_\$\$.sh"; cp "\${ANYTHING_ORIGINAL}" "\$TEMP"; chmod +x "\$TEMP"; exec "\$TEMP" "\$@"; fi
@@ -649,7 +654,7 @@ _evolve_step() {
         _evolve_step "\$intent" "SYNTAX ERROR:\\n\$syn_err\\nFix and define _step\${STEP}() properly." \$((step_num + 1)) "1"; return
     fi
     echo -e "\\033[32m[step \$STEP]\\033[0m \$desc"
-    echo -e "\\033[33m[+\$(echo "\$code" | wc -l) lines]\\033[0m"
+    if [[ \$SHOW_CODE -eq 1 ]]; then echo -e "\\033[33m\$code\\033[0m"; else echo -e "\\033[33m[+\$(echo "\$code" | wc -l) lines]\\033[0m"; fi
     cat >> "\$SELF" <<EVOLUTION
 
 # STEP \$STEP: \$desc | FINAL: \$is_final
