@@ -114,9 +114,9 @@
     .terminal-dot.green { background: #27ca40; }
 
     .prompt {
-      color: #00ff00;
       font-size: 22px;
       line-height: 1.6;
+      margin-bottom: 8px;
     }
 
     .prompt-symbol {
@@ -125,6 +125,21 @@
 
     .prompt-text {
       color: #e0e0e0;
+    }
+
+    .prompt-question {
+      color: #d68fff;
+      font-size: 20px;
+      margin-bottom: 4px;
+    }
+
+    .user-input {
+      color: #00ff00;
+      font-size: 22px;
+    }
+
+    .user-input-marker {
+      color: #d68fff;
     }
 
     .footer {
@@ -154,12 +169,17 @@
       </div>
       <div class="prompt">
         <span class="prompt-symbol">$</span>
-        <span class="prompt-text"> anything.sh -c "find large files</span><br>
-        <span class="prompt-text">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;eating my disk"</span>
+        <span class="prompt-text"> ./anything.sh</span>
+      </div>
+      <div class="prompt-question">
+        <em>what shall I become?</em>
+      </div>
+      <div class="user-input">
+        <span class="user-input-marker">&gt;</span> an immersive text-based RPG with inventory and combat
       </div>
     </div>
 
-    <p class="footer">Not written. <em>Grown.</em></p>
+    <p class="footer">Autopoietic bash. Not written. <em>Grown.</em></p>
   </div>
 </body>
 </html>
