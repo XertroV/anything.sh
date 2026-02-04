@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1200, height=630">
+  <title>anything.sh OG Card</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 1200px;
+      height: 630px;
+      background: #0a0a0a;
+      font-family: 'JetBrains Mono', monospace;
+      color: #e0e0e0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Scanline effect */
+    body::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        rgba(0, 0, 0, 0.1) 0px,
+        rgba(0, 0, 0, 0.1) 1px,
+        transparent 1px,
+        transparent 2px
+      );
+      pointer-events: none;
+      z-index: 100;
+    }
+
+    /* Subtle vignette */
+    body::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.4) 100%);
+      pointer-events: none;
+      z-index: 99;
+    }
+
+    .container {
+      text-align: center;
+      z-index: 1;
+    }
+
+    .title-decoration {
+      color: #ffb000;
+      font-size: 24px;
+      letter-spacing: 4px;
+      margin-bottom: 8px;
+      opacity: 0.7;
+    }
+
+    .title {
+      font-size: 72px;
+      font-weight: 700;
+      color: #ffb000;
+      text-shadow: 0 0 20px rgba(255, 176, 0, 0.4), 0 0 40px rgba(255, 176, 0, 0.2);
+      margin-bottom: 16px;
+    }
+
+    .tagline {
+      font-size: 32px;
+      color: #888;
+      margin-bottom: 48px;
+      font-weight: 400;
+    }
+
+    .terminal {
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 24px 32px;
+      text-align: left;
+      width: 700px;
+      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255,255,255,0.05);
+    }
+
+    .terminal-header {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .terminal-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+
+    .terminal-dot.red { background: #ff5f56; }
+    .terminal-dot.yellow { background: #ffbd2e; }
+    .terminal-dot.green { background: #27ca40; }
+
+    .prompt {
+      color: #00ff00;
+      font-size: 22px;
+      line-height: 1.6;
+    }
+
+    .prompt-symbol {
+      color: #ffb000;
+    }
+
+    .prompt-text {
+      color: #e0e0e0;
+    }
+
+    .footer {
+      margin-top: 48px;
+      font-size: 24px;
+      color: #666;
+      letter-spacing: 2px;
+    }
+
+    .footer em {
+      color: #ffb000;
+      font-style: normal;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="title-decoration">░▒▓█ █▓▒░</div>
+    <h1 class="title">anything.sh</h1>
+    <p class="tagline">The Slime Mold of Bash</p>
+
+    <div class="terminal">
+      <div class="terminal-header">
+        <div class="terminal-dot red"></div>
+        <div class="terminal-dot yellow"></div>
+        <div class="terminal-dot green"></div>
+      </div>
+      <div class="prompt">
+        <span class="prompt-symbol">$</span>
+        <span class="prompt-text"> anything.sh -c "find large files</span><br>
+        <span class="prompt-text">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;eating my disk"</span>
+      </div>
+    </div>
+
+    <p class="footer">Not written. <em>Grown.</em></p>
+  </div>
+</body>
+</html>
