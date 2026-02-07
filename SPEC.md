@@ -87,7 +87,7 @@ RULES:
 | Provider | CLI Command | Notes |
 |----------|-------------|-------|
 | Claude Code | `claude -p "..." --dangerously-skip-permissions` | Anthropic's official CLI |
-| OpenAI Codex | `codex exec "..." --full-auto` | OpenAI's coding agent |
+| OpenAI Codex | `codex exec "..." --full-auto --model gpt-5.1-codex-mini --skip-git-repo-check` | OpenAI's coding agent |
 | Aider | `aider --message "..." --yes --no-stream` | Open source AI pair programmer |
 | Gemini CLI | `gemini -p "..."` | Google's CLI |
 | Goose | `goose run -t "..."` | Block's coding agent |

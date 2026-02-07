@@ -100,7 +100,7 @@ export const PROVIDERS = {
   },
   codex: {
     name: 'Codex',
-    cmd: 'echo "$full_prompt" | codex exec --full-auto -',
+    cmd: 'codex_out="$(mktemp)"; echo "$full_prompt" | codex exec --full-auto --model gpt-5.1-codex-mini --skip-git-repo-check --output-last-message "$codex_out" - >/dev/null 2>/dev/null; codex_rc=$?; [[ $codex_rc -eq 0 ]] && cat "$codex_out"; rm -f "$codex_out"; return $codex_rc',
   },
   aider: {
     name: 'Aider',
@@ -152,7 +152,7 @@ export const ALL_PROVIDERS: ProviderId[] = [
 
 // Providers that show an "untested" badge in the UI
 export const UNTESTED_PROVIDERS: ProviderId[] = [
-  'codex', 'aider', 'goose', 'continue', 'opencode', 'kimi', 'openrouter'
+  'aider', 'goose', 'continue', 'opencode', 'kimi', 'openrouter'
 ];
 
 // Generate full script with provider-specific CLI command
