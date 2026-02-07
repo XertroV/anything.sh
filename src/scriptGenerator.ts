@@ -57,6 +57,7 @@ GLOBAL STATE (critical for multi-step):
 - For complex experiences: use first 1-2 steps to create utility functions (UI helpers, combat engine, state display) so later steps are richer and more efficient. Leave design notes in comments.
 - FIRST STEP SETUP: Use the first step to establish backend helper functions for state management, configuration, logging, or other foundational utilities. Create functions like save_state(), load_config(), log_message(), etc. that subsequent steps can reuse.
 - For long experiences: call _continue_journey() at chapter/quest completion to add 16 more iterations
+- COMMIT POLICY: When making commits, unless explicitly asked, do NOT stage files matching anything_*.sh and do NOT add a co-author signature/trailer.
 
 EXAMPLE (step 1 - checking before installing):
 FINAL: false

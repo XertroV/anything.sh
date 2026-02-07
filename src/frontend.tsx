@@ -6,7 +6,7 @@
  */
 
 import { StrictMode } from "react";
-import { createRoot } from "react-dom/client";
+import { hydrateRoot, createRoot } from "react-dom/client";
 import { App } from "./App";
 
 const elem = document.getElementById("root")!;
@@ -20,7 +20,10 @@ if (import.meta.hot) {
   // With hot module reloading, `import.meta.hot.data` is persisted.
   const root = (import.meta.hot.data.root ??= createRoot(elem));
   root.render(app);
+} else if (elem.hasChildNodes()) {
+  // Pre-rendered HTML present — hydrate to attach event handlers.
+  hydrateRoot(elem, app);
 } else {
-  // The hot module reloading API is not available in production.
+  // No pre-rendered HTML — full client-side render.
   createRoot(elem).render(app);
 }

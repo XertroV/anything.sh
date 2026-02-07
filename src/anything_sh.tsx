@@ -306,6 +306,20 @@ export default function AnythingSH() {
               <span className="text-emerald-400">./anything.sh</span> [<span key={exampleIndex} className="text-zinc-500 underline animate-fadeIn">"{EXAMPLE_PROMPTS[exampleIndex]}"</span>]
             </ManPageSection>
 
+            <ManPageSection title="ENVIRONMENT">
+              <p className="mb-2">
+                <span className="text-emerald-400">ANYTHING_EXTRA</span> — Optional. Inject custom context into the LLM prompt.
+              </p>
+              <p className="mb-4 text-zinc-500 text-xs pl-4">
+                Use to advertise platform-specific tools (e.g. <code className="text-zinc-400">say</code> on macOS), inform about installed utilities, or add task-specific instructions.
+              </p>
+              <div className="bg-zinc-950/50 border border-zinc-800 p-3 font-mono text-xs text-zinc-400">
+                <span className="text-zinc-600"># Example: macOS text-to-speech</span><br/>
+                <span className="text-emerald-400">export</span> ANYTHING_EXTRA=<span className="text-amber-400">"say command available for TTS"</span><br/>
+                <span className="text-zinc-400">./anything.sh</span> <span className="text-zinc-500">"narrate a spooky story"</span>
+              </div>
+            </ManPageSection>
+
             <ManPageSection title="DESCRIPTION">
               <p className="mb-4">
 		The slime mold: a simple creature. It has no intelligence, no structure, no shape, and no plan.
@@ -314,9 +328,9 @@ export default function AnythingSH() {
 		The slime mold rejects your human conceptions of paths and plans, it <span className="text-emerald-400 italic">becomes</span> the path.
               </p>
               <p className="mb-4">
-                <span className="text-white">anything.sh</span> is that, but worse. 
-		It's a bash script that rewrites itself while running. 
-		You type a request. It consults an LLM. 
+                <span className="text-white">anything.sh</span> is that, but worse.
+		It's a bash script that rewrites itself while running.
+		You type a request. It consults an LLM.
 		The response — raw, executable bash — gets <span className="italic">appended to the script's own body</span> and executed immediately.
               </p>
               <p className="mb-4">
@@ -341,20 +355,6 @@ export default function AnythingSH() {
               <p className="text-zinc-500 italic">
                 It's not written. It's <span className="text-emerald-400">grown</span>.
               </p>
-            </ManPageSection>
-
-            <ManPageSection title="ENVIRONMENT">
-              <p className="mb-2">
-                <span className="text-emerald-400">ANYTHING_EXTRA</span> — Optional. Inject custom context into the LLM prompt.
-              </p>
-              <p className="mb-4 text-zinc-500 text-xs pl-4">
-                Use to advertise platform-specific tools (e.g. <code className="text-zinc-400">say</code> on macOS), inform about installed utilities, or add task-specific instructions.
-              </p>
-              <div className="bg-zinc-950/50 border border-zinc-800 p-3 font-mono text-xs text-zinc-400">
-                <span className="text-zinc-600"># Example: macOS text-to-speech</span><br/>
-                <span className="text-emerald-400">export</span> ANYTHING_EXTRA=<span className="text-amber-400">"say command available for TTS"</span><br/>
-                <span className="text-zinc-400">./anything.sh</span> <span className="text-zinc-500">"narrate a spooky story"</span>
-              </div>
             </ManPageSection>
 
             <div className="pt-12 text-zinc-600 text-xs space-y-1">
