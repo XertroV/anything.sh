@@ -490,12 +490,16 @@ PREVIOUS STEP OUTPUT (exit code \$prev_exit):
 
     echo -e "\\033[32m[step \$STEP]\\033[0m \$description"
     echo -e "\\033[36m[llm \${elapsed}s]\\033[0m"
+    local delta_lines=\$(echo "\$code" | wc -l)
+    local delta_bytes=\$(printf '%s' "\$code" | wc -c)
+    local current_total_lines=\$(wc -l < "\$SELF")
+    local current_total_bytes=\$(wc -c < "\$SELF")
+    local projected_total_lines=\$((current_total_lines + delta_lines))
+    local projected_total_bytes=\$((current_total_bytes + delta_bytes))
     if [[ \$SHOW_CODE -eq 1 ]]; then
         echo -e "\\033[33m\$code\\033[0m"
-    else
-        local lines=\$(echo "\$code" | wc -l)
-        echo -e "\\033[33m[+\$lines lines]\\033[0m"
     fi
+    echo -e "\\033[33m[+\$delta_lines lines, +\$delta_bytes bytes | total: \$projected_total_lines lines, \$projected_total_bytes bytes]\\033[0m"
 
     # Append step code directly (not wrapped) - helper functions at top level persist across steps
     # LLM defines step\${STEP}() in the code, we call it with output capture
@@ -720,7 +724,9 @@ _evolve_step() {
     fi
     echo -e "\\033[32m[step \$STEP]\\033[0m \$desc"
     echo -e "\\033[36m[llm \${elapsed}s]\\033[0m"
-    if [[ \$SHOW_CODE -eq 1 ]]; then echo -e "\\033[33m\$code\\033[0m"; else echo -e "\\033[33m[+\$(echo "\$code" | wc -l) lines]\\033[0m"; fi
+    local delta_lines=\$(echo "\$code" | wc -l); local delta_bytes=\$(printf '%s' "\$code" | wc -c); local current_total_lines=\$(wc -l < "\$SELF"); local current_total_bytes=\$(wc -c < "\$SELF"); local projected_total_lines=\$((current_total_lines + delta_lines)); local projected_total_bytes=\$((current_total_bytes + delta_bytes))
+    if [[ \$SHOW_CODE -eq 1 ]]; then echo -e "\\033[33m\$code\\033[0m"; fi
+    echo -e "\\033[33m[+\$delta_lines lines, +\$delta_bytes bytes | total: \$projected_total_lines lines, \$projected_total_bytes bytes]\\033[0m"
     cat >> "\$SELF" <<EVOLUTION
 
 # STEP \$STEP: \$desc | FINAL: \$is_final
