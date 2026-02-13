@@ -47,7 +47,7 @@ GLOBAL STATE (critical for multi-step):
 - For interactive experiences: use the best available tools (TUI, colors, ASCII art) to make something impressive
 - Only use TUI tools shown in INSTALLED TUI: line. To use unlisted tools, install them first (set FINAL: false, ask permission, install, then use)
 - QUALITY: Don't settle for minimal - create something impressive. The user will appreciate extra polish and creativity.
-- AVOID dark gray colors (e.g., \033[90m, "bright black") - they are invisible on black terminals. Use bold white (\033[1;37m), bright colors (\033[96m cyan, \033[93m yellow), or standard colors instead.
+- AVOID dark gray colors (e.g., \\033[90m, "bright black") - they are invisible on black terminals. Use bold white (\\033[1;37m), bright colors (\\033[96m cyan, \\033[93m yellow), or standard colors instead.
 - AVOID piping to head/tail (e.g., cmd | head -20) - can hang due to SIGPIPE issues. Use process substitution or capture to variable first: output=\\$(cmd); echo "\\$output" | head -20
 - Use timing for effect: slow text reveals (pv, character-by-character), pauses for dramatic moments, animations where appropriate
 - When asking for input, ensure the user can see what they need to decide - pause after animations, recap after long output
@@ -96,48 +96,58 @@ TURNS REMAINING: \$remaining (if 1-2 and this is a long experience, call _contin
 export const PROVIDERS = {
   claude: {
     name: 'Claude',
-    cmd: 'claude -p --model sonnet --dangerously-skip-permissions <<< "$full_prompt"',
+    defaultModel: 'sonnet',
+    cmd: 'claude -p --model "$MODEL" --dangerously-skip-permissions <<< "$full_prompt"',
   },
   codex: {
     name: 'Codex',
-    cmd: 'codex_out="$(mktemp)"; echo "$full_prompt" | codex exec --full-auto --model gpt-5.1-codex-mini --skip-git-repo-check --output-last-message "$codex_out" - >/dev/null 2>/dev/null; codex_rc=$?; [[ $codex_rc -eq 0 ]] && cat "$codex_out"; rm -f "$codex_out"; return $codex_rc',
+    defaultModel: 'gpt-5.1-codex-mini',
+    cmd: 'codex_out="$(mktemp)"; echo "$full_prompt" | codex exec --full-auto --model "$MODEL" --skip-git-repo-check --output-last-message "$codex_out" - >/dev/null 2>/dev/null; codex_rc=$?; [[ $codex_rc -eq 0 ]] && cat "$codex_out"; rm -f "$codex_out"; return $codex_rc',
   },
   aider: {
     name: 'Aider',
+    defaultModel: '',
     cmd: 'aider --message-file /dev/stdin --yes --no-stream <<< "$full_prompt"',
   },
   gemini: {
     name: 'Gemini',
-    cmd: 'gemini -y --model auto <<< "$full_prompt"',
+    defaultModel: 'auto',
+    cmd: 'gemini -y --model "$MODEL" <<< "$full_prompt"',
   },
   goose: {
     name: 'Goose',
+    defaultModel: '',
     cmd: 'goose run --no-session -q --instructions - <<< "$full_prompt"',
   },
   continue: {
     name: 'Continue',
+    defaultModel: '',
     cmd: 'cn -p --allow Write --allow Bash 2>/dev/null <<< "$full_prompt"',
   },
   opencode: {
     name: 'OpenCode',
-    cmd: 'opencode run <<< "$full_prompt"',
+    defaultModel: 'opencode/kimi-k2.5-free',
+    cmd: 'opencode run --model "$MODEL" <<< "$full_prompt"',
   },
   kimi: {
     name: 'Kimi',
+    defaultModel: '',
     cmd: 'kimi --print 2>/dev/null <<< "$full_prompt"',
   },
   groq: {
     name: 'Groq',
+    defaultModel: 'moonshotai/kimi-k2-instruct-0905',
     cmd: `curl -s https://api.groq.com/openai/v1/chat/completions \\
       -H "Authorization: Bearer \$GROQ_API_KEY" -H "Content-Type: application/json" \\
-      -d "\$(echo "\$full_prompt" | jq -Rs '{model:"moonshotai/kimi-k2-instruct-0905",messages:[{role:"user",content:.}],temperature:0.7,max_tokens:4096}')" \\
+      -d "\$(echo "\$full_prompt" | jq -Rs --arg model "\$MODEL" '{model:\$model,messages:[{role:"user",content:.}],temperature:0.7,max_tokens:4096}')" \\
       | jq -r '.choices[0].message.content // empty'`,
   },
   openrouter: {
     name: 'OpenRouter',
+    defaultModel: 'anthropic/claude-3.5-sonnet',
     cmd: `curl -s https://openrouter.ai/api/v1/chat/completions \\
       -H "Authorization: Bearer \$OPENROUTER_API_KEY" -H "Content-Type: application/json" \\
-      -d "\$(echo "\$full_prompt" | jq -Rs '{model:"anthropic/claude-3.5-sonnet",messages:[{role:"user",content:.}],max_tokens:4096}')" \\
+      -d "\$(echo "\$full_prompt" | jq -Rs --arg model "\$MODEL" '{model:\$model,messages:[{role:"user",content:.}],max_tokens:4096}')" \\
       | jq -r '.choices[0].message.content // empty'`,
   },
 } as const;
@@ -170,7 +180,7 @@ export const getScriptFull = (provider: ProviderId) => `#!/bin/bash
 # ║  Home: https://xertrov.github.io/anything.sh/                  ║
 # ║  Current Provider: ${PROVIDERS[provider].name.padEnd(41)}   ║
 # ╚════════════════════════════════════════════════════════════════╝
-# USAGE: ./anything.sh [-c|--code] [-a|--agent] ["initial prompt"]
+# USAGE: ./anything.sh [-c|--code] [-a|--agent] [-m|--model <model>] ["initial prompt"]
 
 set -uo pipefail  # -e disabled: we handle errors manually
 
@@ -186,6 +196,8 @@ SPINNER_PID=""  # Track spinner for cleanup
 AGENT_MODE=0  # Set to 1 with -a/--agent flag for non-interactive execution
 AGENT_REALTIME_FD=2  # Agent real-time output: 2=stderr, or use /dev/tty
 SHOW_CODE=0  # Set to 1 with -c/--code flag to print generated code
+MODEL_OVERRIDE=""  # Optional -m/--model override for provider model
+MODEL=""  # Effective model for current provider
 _OUT="/tmp/anything_out_\$\$"  # Stdout capture file for same-process execution
 
 # ─────────────────────────────────────────────────────────────────
@@ -205,9 +217,44 @@ if [[ "$SELF" == *"/bin/"* && ! -f "$ORIG" ]]; then
 fi
 
 # ─────────────────────────────────────────────────────────────────
-# ARGUMENT PARSING: Handle -a/--agent flag
+# ARGUMENT PARSING: Handle flags and optional model override
 # ─────────────────────────────────────────────────────────────────
-while [[ \$# -gt 0 ]]; do case "$1" in -a|--agent) AGENT_MODE=1; shift ;; -c|--code) SHOW_CODE=1; shift ;; --) shift; break ;; -*) echo -e "\\033[31m[error]\\033[0m Unknown: $1" >&2; exit 1 ;; *) break ;; esac; done
+POSITIONAL=()
+while [[ \$# -gt 0 ]]; do
+    case "$1" in
+        -a|--agent)
+            AGENT_MODE=1
+            shift
+            ;;
+        -c|--code)
+            SHOW_CODE=1
+            shift
+            ;;
+        -m|--model)
+            if [[ -z "\${2:-}" || "\${2:0:1}" == "-" ]]; then
+                echo -e "\\033[31m[error]\\033[0m Missing value for $1" >&2
+                exit 1
+            fi
+            MODEL_OVERRIDE="$2"
+            shift 2
+            ;;
+        --)
+            shift
+            while [[ \$# -gt 0 ]]; do POSITIONAL+=("$1"); shift; done
+            break
+            ;;
+        -*)
+            echo -e "\\033[31m[error]\\033[0m Unknown: $1" >&2
+            exit 1
+            ;;
+        *)
+            POSITIONAL+=("$1")
+            shift
+            ;;
+    esac
+done
+set -- "\${POSITIONAL[@]}"
+MODEL="\${MODEL_OVERRIDE:-${PROVIDERS[provider].defaultModel}}"
 
 # ─────────────────────────────────────────────────────────────────
 # AGENT MODE: Create temp copy and exec for non-interactive execution
@@ -599,9 +646,9 @@ fi
 // Generate compact script with provider-specific CLI command
 // Uses same continuation-passing self-append model as full script
 export const getScriptCompact = (provider: ProviderId) => `#!/bin/bash
-# anything.sh [compact] · ${PROVIDERS[provider].name}
+# anything.sh [compact] · ${PROVIDERS[provider].name} · usage: ./anything.sh [-c|--code] [-a|--agent] [-m|--model <model>] ["initial prompt"]
 set -uo pipefail
-SELF="$0"; ORIG="\${SELF}.orig"; STEP=0; MAX_ITER=160; BONUS_ITER=0; SPINNER_PID=""; AGENT_MODE=0; AGENT_REALTIME_FD=2; SHOW_CODE=0
+SELF="$0"; ORIG="\${SELF}.orig"; STEP=0; MAX_ITER=160; BONUS_ITER=0; SPINNER_PID=""; AGENT_MODE=0; AGENT_REALTIME_FD=2; SHOW_CODE=0; MODEL_OVERRIDE=""; MODEL=""
 _OUT="/tmp/anything_out_\$\$"
 [[ -z "\${ANYTHING_ORIGINAL:-}" ]] && export ANYTHING_ORIGINAL="$SELF"
 
@@ -609,7 +656,7 @@ _OUT="/tmp/anything_out_\$\$"
 if [[ "$SELF" == *"/bin/"* && ! -f "$ORIG" ]]; then LOCAL="./anything_\$(date +%Y%m%d_%H%M%S).sh"; cp "$SELF" "$LOCAL"; chmod +x "$LOCAL"; echo -e "\\033[36m[localized]\\033[0m $LOCAL"; exec "$LOCAL" "\$@"; fi
 
 # Parse args
-POSITIONAL=(); while [[ \$# -gt 0 ]]; do case "\$1" in -a|--agent) AGENT_MODE=1; shift ;; -c|--code) SHOW_CODE=1; shift ;; --) shift; break ;; -*) echo "[error] Unknown: \$1" >&2; exit 1 ;; *) POSITIONAL+=("\$1"); shift ;; esac; done; set -- "\${POSITIONAL[@]}"
+POSITIONAL=(); while [[ \$# -gt 0 ]]; do case "\$1" in -a|--agent) AGENT_MODE=1; shift ;; -c|--code) SHOW_CODE=1; shift ;; -m|--model) if [[ -z "\${2:-}" || "\${2:0:1}" == "-" ]]; then echo "[error] Missing value for \$1" >&2; exit 1; fi; MODEL_OVERRIDE="\$2"; shift 2 ;; --) shift; while [[ \$# -gt 0 ]]; do POSITIONAL+=("\$1"); shift; done; break ;; -*) echo "[error] Unknown: \$1" >&2; exit 1 ;; *) POSITIONAL+=("\$1"); shift ;; esac; done; set -- "\${POSITIONAL[@]}"; MODEL="\${MODEL_OVERRIDE:-${PROVIDERS[provider].defaultModel}}"
 
 # Agent mode temp copy
 if [[ \$AGENT_MODE -eq 1 && -n "\${1:-}" ]]; then TEMP="./anything_agent_\$\$.sh"; cp "\${ANYTHING_ORIGINAL}" "\$TEMP"; chmod +x "\$TEMP"; exec "\$TEMP" "\$@"; fi
