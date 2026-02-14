@@ -26,3 +26,19 @@ bun install
 bun run build
 cp dist/claude/full/anything.sh ~/.local/bin/anything.sh
 ```
+
+## Safe Mode
+
+`anything.sh` supports an opt-in safe mode with review gates:
+
+```bash
+anything.sh --safe "set up a demo project"
+anything.sh --safe --allow-cmd "ls,cat,grep,git,mkdir,touch" "inspect repo and summarize"
+anything.sh --safe --safe-show-code "explain and modify my shell config"
+```
+
+Safe mode adds:
+- Step approval (`approve step? [y/N]`)
+- Explicit override prompt for blocked-risk patterns
+- Optional command allowlist (`--allow-cmd`)
+- Safer provider CLI invocation where available

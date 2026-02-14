@@ -98,6 +98,7 @@ export const PROVIDERS = {
     name: 'Claude',
     defaultModel: 'sonnet',
     cmd: 'claude -p --model "$MODEL" --dangerously-skip-permissions <<< "$full_prompt"',
+    safeCmd: 'claude -p --model "$MODEL" <<< "$full_prompt"',
   },
   codex: {
     name: 'Codex',
@@ -108,11 +109,13 @@ export const PROVIDERS = {
     name: 'Aider',
     defaultModel: '',
     cmd: 'aider --message-file /dev/stdin --yes --no-stream <<< "$full_prompt"',
+    safeCmd: 'aider --message-file /dev/stdin --no-stream <<< "$full_prompt"',
   },
   gemini: {
     name: 'Gemini',
     defaultModel: 'auto',
     cmd: 'gemini -y --model "$MODEL" <<< "$full_prompt"',
+    safeCmd: 'gemini --model "$MODEL" <<< "$full_prompt"',
   },
   goose: {
     name: 'Goose',
@@ -123,6 +126,7 @@ export const PROVIDERS = {
     name: 'Continue',
     defaultModel: '',
     cmd: 'cn -p --allow Write --allow Bash 2>/dev/null <<< "$full_prompt"',
+    safeCmd: 'cn -p 2>/dev/null <<< "$full_prompt"',
   },
   opencode: {
     name: 'OpenCode',
@@ -180,7 +184,7 @@ export const getScriptFull = (provider: ProviderId) => `#!/bin/bash
 # ║  Home: https://xertrov.github.io/anything.sh/                  ║
 # ║  Current Provider: ${PROVIDERS[provider].name.padEnd(41)}   ║
 # ╚════════════════════════════════════════════════════════════════╝
-# USAGE: ./anything.sh [-c|--code] [-a|--agent] [-m|--model <model>] ["initial prompt"]
+# USAGE: ./anything.sh [-c|--code] [-a|--agent] [-m|--model <model>] [--safe] [--allow-cmd <csv>] [--safe-yes] [--safe-show-code] ["initial prompt"]
 
 set -uo pipefail  # -e disabled: we handle errors manually
 
@@ -198,7 +202,23 @@ AGENT_REALTIME_FD=2  # Agent real-time output: 2=stderr, or use /dev/tty
 SHOW_CODE=0  # Set to 1 with -c/--code flag to print generated code
 MODEL_OVERRIDE=""  # Optional -m/--model override for provider model
 MODEL=""  # Effective model for current provider
+SAFE_MODE=0  # Set to 1 with --safe or ANYTHING_SAFE=1
+SAFE_ALLOW_CMDS="\${ANYTHING_ALLOW_CMD:-}"  # Optional command allowlist CSV
+SAFE_YES=0  # Set to 1 with --safe-yes or ANYTHING_SAFE_YES=1
+SAFE_SHOW_CODE=0  # Set to 1 with --safe-show-code or ANYTHING_SAFE_SHOW_CODE=1
 _OUT="/tmp/anything_out_\$\$"  # Stdout capture file for same-process execution
+
+if [[ "\${ANYTHING_SAFE:-0}" == "1" ]]; then SAFE_MODE=1; fi
+if [[ "\${ANYTHING_SAFE_YES:-0}" == "1" ]]; then SAFE_YES=1; fi
+if [[ "\${ANYTHING_SAFE_SHOW_CODE:-0}" == "1" ]]; then SAFE_SHOW_CODE=1; fi
+
+_print_help() {
+    echo "usage: ./anything.sh [-c|--code] [-a|--agent] [-m|--model <model>] [--safe] [--allow-cmd <csv>] [--safe-yes] [--safe-show-code] [\"initial prompt\"]"
+    echo "  --safe           Enable step approval and risk checks"
+    echo "  --allow-cmd CSV  Optional command allowlist in safe mode"
+    echo "  --safe-yes       Auto-approve non-blocked safe-mode steps"
+    echo "  --safe-show-code Always print generated code during safe review"
+}
 
 # ─────────────────────────────────────────────────────────────────
 # TRACK ORIGINAL: For agent mode self-calling, track the original script
@@ -222,6 +242,10 @@ fi
 POSITIONAL=()
 while [[ \$# -gt 0 ]]; do
     case "$1" in
+        -h|--help)
+            _print_help
+            exit 0
+            ;;
         -a|--agent)
             AGENT_MODE=1
             shift
@@ -237,6 +261,26 @@ while [[ \$# -gt 0 ]]; do
             fi
             MODEL_OVERRIDE="$2"
             shift 2
+            ;;
+        --safe)
+            SAFE_MODE=1
+            shift
+            ;;
+        --allow-cmd)
+            if [[ -z "\${2:-}" || "\${2:0:1}" == "-" ]]; then
+                echo -e "\\033[31m[error]\\033[0m Missing value for $1" >&2
+                exit 1
+            fi
+            SAFE_ALLOW_CMDS="$2"
+            shift 2
+            ;;
+        --safe-yes)
+            SAFE_YES=1
+            shift
+            ;;
+        --safe-show-code)
+            SAFE_SHOW_CODE=1
+            shift
             ;;
         --)
             shift
@@ -255,6 +299,16 @@ while [[ \$# -gt 0 ]]; do
 done
 set -- "\${POSITIONAL[@]}"
 MODEL="\${MODEL_OVERRIDE:-${PROVIDERS[provider].defaultModel}}"
+
+if [[ \$AGENT_MODE -eq 0 && \$# -eq 0 ]]; then
+    _print_help
+    exit 0
+fi
+
+if [[ \$AGENT_MODE -eq 1 && \$SAFE_MODE -eq 1 && \$SAFE_YES -eq 0 ]]; then
+    echo -e "\\033[31m[error]\\033[0m --agent + --safe requires --safe-yes (non-interactive mode cannot confirm each step)" >&2
+    exit 1
+fi
 
 # ─────────────────────────────────────────────────────────────────
 # AGENT MODE: Create temp copy and exec for non-interactive execution
@@ -351,7 +405,11 @@ AGENT MODE: This script is running with -a/--agent flag (non-interactive).
 ${LLM_PROMPT}\$agent_context
 _ANYTHING_PROMPT_EOF_
 
-    ${PROVIDERS[provider].cmd}
+    if [[ \$SAFE_MODE -eq 1 ]]; then
+        ${PROVIDERS[provider].safeCmd ?? `echo -e "\\033[33m[warn]\\033[0m Safe mode has no provider-specific safe command for ${PROVIDERS[provider].name}; using default CLI invocation" >&2; ${PROVIDERS[provider].cmd}`}
+    else
+        ${PROVIDERS[provider].cmd}
+    fi
 }
 
 # ─────────────────────────────────────────────────────────────────
@@ -391,6 +449,118 @@ _discover_tui() {
         echo
     done
     echo "=== END TUI REFERENCE ==="
+}
+
+# ─────────────────────────────────────────────────────────────────
+# SAFE MODE: Risk checks and approval before executing generated code
+# ─────────────────────────────────────────────────────────────────
+_safe_cmd_allowed() {
+    local cmd="$1"
+    [[ -z "$SAFE_ALLOW_CMDS" ]] && return 0
+    local normalized=",\$(echo "$SAFE_ALLOW_CMDS" | tr -d '[:space:]'),"
+    [[ "$normalized" == *",$cmd,"* ]]
+}
+
+_safe_scan_code() {
+    local code="$1"
+    local unsafe=0
+    local needs_override=0
+    local line cmd
+    local -a seen_cmds=()
+    local -a denied_cmds=()
+    local reasons=""
+
+    while IFS= read -r line; do
+        [[ -z "\${line// }" ]] && continue
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$line" == *";"* || "$line" == *"&"* || "$line" == *"|"* ]] && continue
+        [[ "$line" =~ ^[[:space:]]*(if|then|elif|else|fi|for|while|do|done|case|esac|function)[[:space:]]*$ ]] && continue
+        [[ "$line" =~ ^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*= ]] && continue
+        cmd="\$(echo "$line" | sed -E 's/^[[:space:]]+//' | awk '{print $1}')"
+        [[ -z "$cmd" ]] && continue
+        if [[ "$cmd" == "sudo" ]]; then
+            reasons+="sudo detected; "
+            unsafe=1
+            continue
+        fi
+        if [[ "$cmd" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            seen_cmds+=("$cmd")
+            if ! _safe_cmd_allowed "$cmd"; then
+                denied_cmds+=("$cmd")
+                unsafe=1
+            fi
+        fi
+    done <<< "$code"
+
+    if echo "$code" | grep -Eqi '(^|[[:space:]])rm[[:space:]].*(-rf|-fr)[[:space:]]*/($|[[:space:]])'; then
+        reasons+="rm -rf / pattern; "
+        needs_override=1
+    fi
+    if echo "$code" | grep -Eqi '(^|[[:space:]])(mkfs|fdisk|parted|sfdisk)($|[[:space:]])'; then
+        reasons+="disk formatting/partitioning command; "
+        needs_override=1
+    fi
+    if echo "$code" | grep -Eqi '(^|[[:space:]])dd[[:space:]].*of=/dev/(sd|nvme|vd|xvd|mmcblk)'; then
+        reasons+="dd to block device; "
+        needs_override=1
+    fi
+    if echo "$code" | grep -Eqi '(^|[[:space:]])(chmod|chown)[[:space:]].*([[:space:]]/($|[[:space:]])|[[:space:]]/(etc|usr|var)($|/))'; then
+        reasons+="chmod/chown on critical path; "
+        needs_override=1
+    fi
+
+    local uniq_cmds="\$(printf '%s\n' "\${seen_cmds[@]}" | awk '!seen[$0]++' | tr '\n' ' ')"
+    local uniq_denied="\$(printf '%s\n' "\${denied_cmds[@]}" | awk '!seen[$0]++' | tr '\n' ' ')"
+    echo "CMDS:\$uniq_cmds"
+    echo "DENIED:\$uniq_denied"
+    echo "UNSAFE:\$unsafe"
+    echo "OVERRIDE:\$needs_override"
+    echo "REASONS:\$reasons"
+}
+
+_safe_gate() {
+    local code="$1"
+    local summary
+    local cmds denied unsafe override reasons
+    summary="$(_safe_scan_code "$code")"
+    cmds="\$(echo "$summary" | sed -n 's/^CMDS://p')"
+    denied="\$(echo "$summary" | sed -n 's/^DENIED://p')"
+    unsafe="\$(echo "$summary" | sed -n 's/^UNSAFE://p')"
+    override="\$(echo "$summary" | sed -n 's/^OVERRIDE://p')"
+    reasons="\$(echo "$summary" | sed -n 's/^REASONS://p')"
+
+    echo -e "\\033[36m[safe review]\\033[0m commands: \${cmds:-<none detected>}"
+    [[ -n "$denied" ]] && echo -e "\\033[33m[safe review]\\033[0m not in allowlist: $denied"
+    [[ -n "$reasons" ]] && echo -e "\\033[33m[safe review]\\033[0m risk flags: $reasons"
+
+    if [[ \$SAFE_SHOW_CODE -eq 1 || \$SHOW_CODE -eq 1 ]]; then
+        echo -e "\\033[33m$code\\033[0m"
+    fi
+
+    if [[ "$override" == "1" ]]; then
+        if [[ \$AGENT_MODE -eq 1 ]]; then
+            echo -e "\\033[31m[safe blocked]\\033[0m blocked-risk step cannot be overridden in --agent mode" >&2
+            return 2
+        fi
+        read -rp $'\\033[31m  type OVERRIDE to run blocked-risk code: \\033[0m' reply
+        [[ "$reply" == "OVERRIDE" ]] || return 1
+    elif [[ "$unsafe" == "1" && -n "$SAFE_ALLOW_CMDS" ]]; then
+        if [[ \$AGENT_MODE -eq 1 ]]; then
+            echo -e "\\033[31m[safe blocked]\\033[0m allowlist denied command in --agent mode" >&2
+            return 2
+        fi
+        read -rp $'\\033[31m  type OVERRIDE to run command outside allowlist: \\033[0m' reply
+        [[ "$reply" == "OVERRIDE" ]] || return 1
+    fi
+
+    if [[ \$SAFE_YES -eq 1 ]]; then
+        return 0
+    fi
+    if [[ \$AGENT_MODE -eq 1 ]]; then
+        return 0
+    fi
+    read -rp $'\\033[95m  approve step? [y/N] \\033[0m' ok
+    [[ "$ok" =~ ^[Yy]$ ]]
 }
 
 # ─────────────────────────────────────────────────────────────────
@@ -488,6 +658,22 @@ PREVIOUS STEP OUTPUT (exit code \$prev_exit):
         return
     fi
 
+    if [[ \$SAFE_MODE -eq 1 ]]; then
+        if ! _safe_gate "\$code"; then
+            local safe_rc=\$?
+            if [[ \$safe_rc -eq 2 ]]; then
+                if [[ \$AGENT_MODE -eq 1 ]]; then
+                    echo -e "\\033[31m[error]\\033[0m safe mode blocked this step in non-interactive execution" >&2
+                    exit 1
+                fi
+                _evolve_step "\$intent" "SAFE MODE BLOCKED: high-risk command denied by policy. Regenerate using safer approach." \$((step_num + 1)) "1"
+                return
+            fi
+            _evolve_step "\$intent" "SAFE MODE REJECTED: user denied proposed step. Regenerate a safer alternative." \$((step_num + 1)) "1"
+            return
+        fi
+    fi
+
     echo -e "\\033[32m[step \$STEP]\\033[0m \$description"
     echo -e "\\033[36m[llm \${elapsed}s]\\033[0m"
     local delta_lines=\$(echo "\$code" | wc -l)
@@ -496,7 +682,7 @@ PREVIOUS STEP OUTPUT (exit code \$prev_exit):
     local current_total_bytes=\$(wc -c < "\$SELF")
     local projected_total_lines=\$((current_total_lines + delta_lines))
     local projected_total_bytes=\$((current_total_bytes + delta_bytes))
-    if [[ \$SHOW_CODE -eq 1 ]]; then
+    if [[ \$SHOW_CODE -eq 1 && \$SAFE_MODE -eq 0 ]]; then
         echo -e "\\033[33m\$code\\033[0m"
     fi
     echo -e "\\033[33m[+\$delta_lines lines, +\$delta_bytes bytes | total: \$projected_total_lines lines, \$projected_total_bytes bytes]\\033[0m"
@@ -650,17 +836,23 @@ fi
 // Generate compact script with provider-specific CLI command
 // Uses same continuation-passing self-append model as full script
 export const getScriptCompact = (provider: ProviderId) => `#!/bin/bash
-# anything.sh [compact] · ${PROVIDERS[provider].name} · usage: ./anything.sh [-c|--code] [-a|--agent] [-m|--model <model>] ["initial prompt"]
+# anything.sh [compact] · ${PROVIDERS[provider].name} · usage: ./anything.sh [-c|--code] [-a|--agent] [-m|--model <model>] [--safe] [--allow-cmd <csv>] [--safe-yes] [--safe-show-code] ["initial prompt"]
 set -uo pipefail
-SELF="$0"; ORIG="\${SELF}.orig"; STEP=0; MAX_ITER=160; BONUS_ITER=0; SPINNER_PID=""; AGENT_MODE=0; AGENT_REALTIME_FD=2; SHOW_CODE=0; MODEL_OVERRIDE=""; MODEL=""
+SELF="$0"; ORIG="\${SELF}.orig"; STEP=0; MAX_ITER=160; BONUS_ITER=0; SPINNER_PID=""; AGENT_MODE=0; AGENT_REALTIME_FD=2; SHOW_CODE=0; MODEL_OVERRIDE=""; MODEL=""; SAFE_MODE=0; SAFE_ALLOW_CMDS="\${ANYTHING_ALLOW_CMD:-}"; SAFE_YES=0; SAFE_SHOW_CODE=0
 _OUT="/tmp/anything_out_\$\$"
 [[ -z "\${ANYTHING_ORIGINAL:-}" ]] && export ANYTHING_ORIGINAL="$SELF"
+[[ "\${ANYTHING_SAFE:-0}" == "1" ]] && SAFE_MODE=1
+[[ "\${ANYTHING_SAFE_YES:-0}" == "1" ]] && SAFE_YES=1
+[[ "\${ANYTHING_SAFE_SHOW_CODE:-0}" == "1" ]] && SAFE_SHOW_CODE=1
+_print_help() { echo "usage: ./anything.sh [-c|--code] [-a|--agent] [-m|--model <model>] [--safe] [--allow-cmd <csv>] [--safe-yes] [--safe-show-code] [\"initial prompt\"]"; echo "  --safe           Enable step approval and risk checks"; echo "  --allow-cmd CSV  Optional command allowlist in safe mode"; echo "  --safe-yes       Auto-approve non-blocked safe-mode steps"; echo "  --safe-show-code Always print generated code during safe review"; }
 
 # Auto-localize
 if [[ "$SELF" == *"/bin/"* && ! -f "$ORIG" ]]; then LOCAL="./anything_\$(date +%Y%m%d_%H%M%S).sh"; cp "$SELF" "$LOCAL"; chmod +x "$LOCAL"; echo -e "\\033[36m[localized]\\033[0m $LOCAL"; exec "$LOCAL" "\$@"; fi
 
 # Parse args
-POSITIONAL=(); while [[ \$# -gt 0 ]]; do case "\$1" in -a|--agent) AGENT_MODE=1; shift ;; -c|--code) SHOW_CODE=1; shift ;; -m|--model) if [[ -z "\${2:-}" || "\${2:0:1}" == "-" ]]; then echo "[error] Missing value for \$1" >&2; exit 1; fi; MODEL_OVERRIDE="\$2"; shift 2 ;; --) shift; while [[ \$# -gt 0 ]]; do POSITIONAL+=("\$1"); shift; done; break ;; -*) echo "[error] Unknown: \$1" >&2; exit 1 ;; *) POSITIONAL+=("\$1"); shift ;; esac; done; set -- "\${POSITIONAL[@]}"; MODEL="\${MODEL_OVERRIDE:-${PROVIDERS[provider].defaultModel}}"
+POSITIONAL=(); while [[ \$# -gt 0 ]]; do case "\$1" in -h|--help) _print_help; exit 0 ;; -a|--agent) AGENT_MODE=1; shift ;; -c|--code) SHOW_CODE=1; shift ;; -m|--model) if [[ -z "\${2:-}" || "\${2:0:1}" == "-" ]]; then echo "[error] Missing value for \$1" >&2; exit 1; fi; MODEL_OVERRIDE="\$2"; shift 2 ;; --safe) SAFE_MODE=1; shift ;; --allow-cmd) if [[ -z "\${2:-}" || "\${2:0:1}" == "-" ]]; then echo "[error] Missing value for \$1" >&2; exit 1; fi; SAFE_ALLOW_CMDS="\$2"; shift 2 ;; --safe-yes) SAFE_YES=1; shift ;; --safe-show-code) SAFE_SHOW_CODE=1; shift ;; --) shift; while [[ \$# -gt 0 ]]; do POSITIONAL+=("\$1"); shift; done; break ;; -*) echo "[error] Unknown: \$1" >&2; exit 1 ;; *) POSITIONAL+=("\$1"); shift ;; esac; done; set -- "\${POSITIONAL[@]}"; MODEL="\${MODEL_OVERRIDE:-${PROVIDERS[provider].defaultModel}}"
+if [[ \$AGENT_MODE -eq 0 && \$# -eq 0 ]]; then _print_help; exit 0; fi
+if [[ \$AGENT_MODE -eq 1 && \$SAFE_MODE -eq 1 && \$SAFE_YES -eq 0 ]]; then echo "[error] --agent + --safe requires --safe-yes" >&2; exit 1; fi
 
 # Agent mode temp copy
 if [[ \$AGENT_MODE -eq 1 && -n "\${1:-}" ]]; then TEMP="./anything_agent_\$\$.sh"; cp "\${ANYTHING_ORIGINAL}" "\$TEMP"; chmod +x "\$TEMP"; exec "\$TEMP" "\$@"; fi
@@ -675,6 +867,9 @@ trap _sigint INT
 _continue_journey() { BONUS_ITER=\$((BONUS_ITER + 16)); echo -e "\\033[36m[+16 iterations]\\033[0m"; }
 _spin() { while :; do for c in · ·· ··· ···· ····· ' ····' '  ···' '   ··' '    ·' '     '; do printf "\\r\\033[36m%s\\033[0m" "\$c" >&2; sleep .1; done; done; }
 _discover_tui() { echo "=== TUI TOOL REFERENCE ==="; for t in gum fzf boxes figlet toilet cowsay; do command -v "\$t" &>/dev/null || continue; echo "--- \$t ---"; "\$t" --help 2>&1|head -30; case "\$t" in boxes) echo "Designs:"; boxes -l 2>&1|awk '/^[a-z]/{print \$1}'|head -20|tr '\\n' ' '; echo;; gum) echo "Subcommands: choose input confirm spin style filter pager write";; esac; echo; done; echo "=== END TUI REFERENCE ==="; }
+_safe_cmd_allowed() { local c="\$1"; [[ -z "\$SAFE_ALLOW_CMDS" ]] && return 0; local n=",\$(echo "\$SAFE_ALLOW_CMDS"|tr -d '[:space:]'),"; [[ "\$n" == *",\$c,"* ]]; }
+_safe_scan_code() { local code="\$1" line cmd unsafe=0 ov=0 reasons="" seen="" denied=""; while IFS= read -r line; do [[ -z "\${line// }" || "\$line" =~ ^[[:space:]]*# || "\$line" == *";"* || "\$line" == *"&"* || "\$line" == *"|"* || "\$line" =~ ^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*= ]] && continue; cmd="\$(echo "\$line"|sed -E 's/^[[:space:]]+//'|awk '{print $1}')"; [[ -z "\$cmd" ]] && continue; [[ "\$cmd" == "sudo" ]] && unsafe=1 && reasons+="sudo detected; " && continue; seen+="\$cmd "; _safe_cmd_allowed "\$cmd" || { denied+="\$cmd "; unsafe=1; }; done <<< "\$code"; echo "\$code"|grep -Eqi '(^|[[:space:]])rm[[:space:]].*(-rf|-fr)[[:space:]]*/($|[[:space:]])' && ov=1 && reasons+="rm -rf / pattern; "; echo "\$code"|grep -Eqi '(^|[[:space:]])(mkfs|fdisk|parted|sfdisk)($|[[:space:]])' && ov=1 && reasons+="disk formatting/partitioning command; "; echo "\$code"|grep -Eqi '(^|[[:space:]])dd[[:space:]].*of=/dev/(sd|nvme|vd|xvd|mmcblk)' && ov=1 && reasons+="dd to block device; "; echo "\$code"|grep -Eqi '(^|[[:space:]])(chmod|chown)[[:space:]].*([[:space:]]/($|[[:space:]])|[[:space:]]/(etc|usr|var)($|/))' && ov=1 && reasons+="chmod/chown on critical path; "; echo "CMDS:\$seen"; echo "DENIED:\$denied"; echo "UNSAFE:\$unsafe"; echo "OVERRIDE:\$ov"; echo "REASONS:\$reasons"; }
+_safe_gate() { local code="\$1" s c d u o r reply ok; s="$(_safe_scan_code "\$code")"; c="\$(echo "\$s"|sed -n 's/^CMDS://p')"; d="\$(echo "\$s"|sed -n 's/^DENIED://p')"; u="\$(echo "\$s"|sed -n 's/^UNSAFE://p')"; o="\$(echo "\$s"|sed -n 's/^OVERRIDE://p')"; r="\$(echo "\$s"|sed -n 's/^REASONS://p')"; echo -e "\\033[36m[safe]\\033[0m commands: \${c:-<none>}"; [[ -n "\$d" ]] && echo -e "\\033[33m[safe]\\033[0m not in allowlist: \$d"; [[ -n "\$r" ]] && echo -e "\\033[33m[safe]\\033[0m risk flags: \$r"; [[ \$SAFE_SHOW_CODE -eq 1 || \$SHOW_CODE -eq 1 ]] && echo -e "\\033[33m\$code\\033[0m"; if [[ "\$o" == "1" ]]; then [[ \$AGENT_MODE -eq 1 ]] && echo "[safe blocked] blocked-risk step cannot be overridden in --agent mode" >&2 && return 2; read -rp $'\\033[31m  type OVERRIDE to run blocked-risk code: \\033[0m' reply; [[ "\$reply" == "OVERRIDE" ]] || return 1; elif [[ "\$u" == "1" && -n "\$SAFE_ALLOW_CMDS" ]]; then [[ \$AGENT_MODE -eq 1 ]] && echo "[safe blocked] allowlist denied command in --agent mode" >&2 && return 2; read -rp $'\\033[31m  type OVERRIDE to run command outside allowlist: \\033[0m' reply; [[ "\$reply" == "OVERRIDE" ]] || return 1; fi; [[ \$SAFE_YES -eq 1 || \$AGENT_MODE -eq 1 ]] && return 0; read -rp $'\\033[95m  approve step? [y/N] \\033[0m' ok; [[ "\$ok" =~ ^[Yy]$ ]]; }
 
 _ask() {
     local intent="\$1"; local feedback="\${2:-}"; local remaining="\${3:-?}"; local agent_ctx=""; local AGENT_MODE_RULE=""; local script_content; script_content=\$(sed '/^# ─.*OUTPUT FROM STEP/,/^# ─\|EOF\|^$/d' "\$SELF" 2>/dev/null || cat "\$SELF")
@@ -692,7 +887,11 @@ _ask() {
     read -r -d '' full_prompt <<PROMPT
 ${LLM_PROMPT}\$agent_ctx
 PROMPT
-    ${PROVIDERS[provider].cmd}
+    if [[ \$SAFE_MODE -eq 1 ]]; then
+        ${PROVIDERS[provider].safeCmd ?? `echo "[warn] Safe mode has no provider-specific safe command for ${PROVIDERS[provider].name}; using default CLI invocation" >&2; ${PROVIDERS[provider].cmd}`}
+    else
+        ${PROVIDERS[provider].cmd}
+    fi
 }
 
 _evolve_step() {
@@ -722,10 +921,20 @@ _evolve_step() {
         echo -e "\\033[31m[syntax error]\\033[0m \$syn_err"
         _evolve_step "\$intent" "SYNTAX ERROR:\\n\$syn_err\\nFix and define _step\${STEP}() properly." \$((step_num + 1)) "1"; return
     fi
+    if [[ \$SAFE_MODE -eq 1 ]]; then
+        if ! _safe_gate "\$code"; then
+            local safe_rc=\$?
+            if [[ \$safe_rc -eq 2 ]]; then
+                if [[ \$AGENT_MODE -eq 1 ]]; then echo "[error] safe mode blocked this step in non-interactive execution" >&2; exit 1; fi
+                _evolve_step "\$intent" "SAFE MODE BLOCKED: high-risk command denied by policy. Regenerate using safer approach." \$((step_num + 1)) "1"; return
+            fi
+            _evolve_step "\$intent" "SAFE MODE REJECTED: user denied proposed step. Regenerate a safer alternative." \$((step_num + 1)) "1"; return
+        fi
+    fi
     echo -e "\\033[32m[step \$STEP]\\033[0m \$desc"
     echo -e "\\033[36m[llm \${elapsed}s]\\033[0m"
     local delta_lines=\$(echo "\$code" | wc -l); local delta_bytes=\$(printf '%s' "\$code" | wc -c); local current_total_lines=\$(wc -l < "\$SELF"); local current_total_bytes=\$(wc -c < "\$SELF"); local projected_total_lines=\$((current_total_lines + delta_lines)); local projected_total_bytes=\$((current_total_bytes + delta_bytes))
-    if [[ \$SHOW_CODE -eq 1 ]]; then echo -e "\\033[33m\$code\\033[0m"; fi
+    if [[ \$SHOW_CODE -eq 1 && \$SAFE_MODE -eq 0 ]]; then echo -e "\\033[33m\$code\\033[0m"; fi
     echo -e "\\033[33m[+\$delta_lines lines, +\$delta_bytes bytes | total: \$projected_total_lines lines, \$projected_total_bytes bytes]\\033[0m"
     cat >> "\$SELF" <<EVOLUTION
 

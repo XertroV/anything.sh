@@ -182,6 +182,7 @@ For users without CLI tools installed, provide direct API access:
 3. **File Modification**: Script modifies itself - potential for data loss
 4. **Network Access**: LLM queries require internet
 5. **Code Execution**: Generated code runs immediately without review
+6. **Safe Mode (Opt-in)**: `--safe` adds step approvals, high-risk command override prompts, and optional command allowlist via `--allow-cmd`.
 
 ## Development
 
